@@ -3,11 +3,11 @@
 // Full 5-finger skeleton tracking with hysteresis to prevent state flickering.
 // Uses PIP (second joint) vs TIP distance from WRIST for reliable open/closed.
 //
-// GESTURE MAP (from image):
-//   🤟 Middle+Ring+Pinky CLOSED, Thumb+Index SPREAD → moving apart = ZOOM IN
+// GESTURE MAP:
+//   🤟 Middle+Ring+Pinky CLOSED, Thumb+Index SPREAD → moving apart  = ZOOM IN
 //   🤟 Middle+Ring+Pinky CLOSED, Thumb+Index COMPRESS → moving together = ZOOM OUT
-//   ✊ All 5 fingers CLOSED (fist) + move hand → ROTATE
-//   🖐️ All 5 fingers OPEN → IDLE (nothing)
+//   🖐️ All 5 fingers OPEN + move hand → ROTATE (spin orb)
+//   ✊ All 5 fingers CLOSED (fist) → IDLE (nothing)
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -195,8 +195,8 @@ export class HandTracker {
       this.pinch = null;
     }
 
-    // ── 4. ROTATE — all 5 closed (fist) + hand moves ────────────────────────
-    if (allClosed && this.prevPalm) {
+    // ── 4. ROTATE — all 5 OPEN + hand moves → spin orb ──────────────────────
+    if (allOpen && this.prevPalm) {
       let dx = this.palm.x - this.prevPalm.x;
       let dy = this.palm.y - this.prevPalm.y;
       dx = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dx));
@@ -207,7 +207,7 @@ export class HandTracker {
       }
     }
 
-    // allOpen → mode stays "idle"
+    // allClosed (fist) → mode stays "idle"
 
     this._emitStatus({ hands: landmarks.length, mode });
   }
@@ -230,7 +230,7 @@ export class HandTracker {
     const m  = this.lastStatus.mode;
     const fo = this.fingerOpen;
 
-    const allClosed = !fo.thumb && !fo.index && !fo.middle && !fo.ring && !fo.pinky;
+    const allOpen   =  fo.thumb &&  fo.index &&  fo.middle &&  fo.ring &&  fo.pinky;
 
     // Helper: mirror x
     const mx = (lm, id) => (1 - lm[id].x) * width;
@@ -291,15 +291,15 @@ export class HandTracker {
       ctx.stroke();
     });
 
-    // Palm centroid ring (fist = bright)
+    // Palm centroid ring (open hand = bright, ready to rotate)
     if (this.palm) {
       const pcx = this.palm.x * width;
       const pcy = this.palm.y * height;
       ctx.beginPath();
-      ctx.arc(pcx, pcy, allClosed ? 7 : 4, 0, Math.PI * 2);
-      ctx.fillStyle = allClosed ? "#7fe8ff" : "rgba(77,184,255,0.3)";
+      ctx.arc(pcx, pcy, allOpen ? 7 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = allOpen ? "#7fe8ff" : "rgba(77,184,255,0.3)";
       ctx.fill();
-      if (allClosed) {
+      if (allOpen) {
         ctx.beginPath();
         ctx.arc(pcx, pcy, 14, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(127,232,255,0.4)";
