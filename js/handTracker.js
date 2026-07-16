@@ -1,37 +1,44 @@
-// handTracker.js — SIGNAL gesture engine v8
+// handTracker.js — SIGNAL gesture engine v9
 //
-// Tracks all 5 fingers individually using tip-vs-MCP wrist-distance comparison.
+// Full 5-finger skeleton tracking with hysteresis to prevent state flickering.
+// Uses PIP (second joint) vs TIP distance from WRIST for reliable open/closed.
 //
-// GESTURE MAP:
-//   ✊ (all 5 closed / fist)             + move hand  → ROTATE
-//   🤟 (middle+ring+pinky closed,          
-//       thumb+index spread/moving apart) → ZOOM IN
-//   🤟 (middle+ring+pinky closed,
-//       thumb+index moving together)     → ZOOM OUT
-//   🖐️ (all 5 open, any state)           → IDLE (nothing)
-//
-// Finger-open detection: tip is farther from wrist than its MCP × 1.1 → extended.
+// GESTURE MAP (from image):
+//   🤟 Middle+Ring+Pinky CLOSED, Thumb+Index SPREAD → moving apart = ZOOM IN
+//   🤟 Middle+Ring+Pinky CLOSED, Thumb+Index COMPRESS → moving together = ZOOM OUT
+//   ✊ All 5 fingers CLOSED (fist) + move hand → ROTATE
+//   🖐️ All 5 fingers OPEN → IDLE (nothing)
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
-// ── Landmark indices ──────────────────────────────────────────────────────────
-const WRIST      = 0;
-const THUMB_TIP  = 4;  const THUMB_MCP  = 2;
-const INDEX_TIP  = 8;  const INDEX_MCP  = 5;
-const MIDDLE_TIP = 12; const MIDDLE_MCP = 9;
-const RING_TIP   = 16; const RING_MCP   = 13;
-const PINKY_TIP  = 20; const PINKY_MCP  = 17;
-const PALM_IDS   = [0, 5, 9, 13, 17];
+// ── Full landmark map ─────────────────────────────────────────────────────────
+const WRIST = 0;
+
+const FINGERS = [
+  // name,    mcp, pip, dip, tip
+  { name: "thumb",  mcp:  2, pip:  3, dip:  3, tip:  4 }, // thumb has only 2 joints (IP = pip)
+  { name: "index",  mcp:  5, pip:  6, dip:  7, tip:  8 },
+  { name: "middle", mcp:  9, pip: 10, dip: 11, tip: 12 },
+  { name: "ring",   mcp: 13, pip: 14, dip: 15, tip: 16 },
+  { name: "pinky",  mcp: 17, pip: 18, dip: 19, tip: 20 },
+];
+
+const PALM_IDS = [0, 5, 9, 13, 17];
+
+// ── Finger open/closed detection ─────────────────────────────────────────────
+// A finger is OPEN when TIP is farther from WRIST than PIP.
+// Hysteresis: needs to cross threshold by a margin to change state (kills flicker).
+const OPEN_THRESHOLD  = 1.02;  // ratio to flip from closed → open
+const CLOSE_THRESHOLD = 0.94;  // ratio to flip from open → closed
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
-const OPEN_RATIO    = 1.08;  // tip/mcp wrist-distance ratio to count as "open"
-const PINCH_SMOOTH  = 0.30;  // EMA on thumb-index distance
-const PALM_SMOOTH   = 0.40;  // EMA on palm centroid
-const ZOOM_DEAD     = 0.006; // min delta to count as intentional zoom motion
-const ZOOM_SCALE    = 18.0;  // delta → zoom factor
-const ZOOM_MAX      = 0.10;  // max zoom step per frame
-const ROTATE_DEAD   = 0.005; // min palm delta for rotation
+const PINCH_SMOOTH  = 0.25;   // EMA on thumb-index distance
+const PALM_SMOOTH   = 0.35;   // EMA on palm centroid
+const ZOOM_DEAD     = 0.005;  // min delta to count as intentional zoom
+const ZOOM_SCALE    = 20.0;   // delta → zoom factor
+const ZOOM_MAX      = 0.10;   // max zoom step per frame
+const ROTATE_DEAD   = 0.005;
 const ROTATE_SCALE  = 2.5;
 const ROTATE_MAX    = 0.025;
 
@@ -40,29 +47,15 @@ function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/** Returns true if the finger is extended (open). */
-function fingerOpen(lm, tipId, mcpId) {
-  return dist2d(lm[tipId], lm[WRIST]) > dist2d(lm[mcpId], lm[WRIST]) * OPEN_RATIO;
-}
-
-/** Mirrored palm centroid for display. */
 function palmMirrored(lm) {
   let x = 0, y = 0;
   for (const id of PALM_IDS) { x += lm[id].x; y += lm[id].y; }
   return { x: 1 - x / PALM_IDS.length, y: y / PALM_IDS.length };
 }
 
-/** Raw (un-mirrored) palm centroid for distance calculations. */
-function palmRaw(lm) {
-  let x = 0, y = 0;
-  for (const id of PALM_IDS) { x += lm[id].x; y += lm[id].y; }
-  return { x: x / PALM_IDS.length, y: y / PALM_IDS.length };
-}
-
-/** Normalized thumb↔index distance / hand scale. */
 function pinchDist(lm) {
-  const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
-  return scale < 1e-6 ? 0.5 : dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / scale;
+  const scale = dist2d(lm[WRIST], lm[FINGERS[2].mcp]); // use middle MCP as scale
+  return scale < 1e-6 ? 0.5 : dist2d(lm[FINGERS[0].tip], lm[FINGERS[1].tip]) / scale;
 }
 
 
@@ -83,9 +76,11 @@ export class HandTracker {
   }
 
   _clear() {
-    this.pinch    = null;  // smoothed thumb-index distance
-    this.palm     = null;  // smoothed mirrored palm centroid
-    this.prevPalm = null;
+    // Persistent finger open/closed states (hysteresis)
+    this.fingerOpen = { thumb: false, index: false, middle: false, ring: false, pinky: false };
+    this.pinch      = null;
+    this.palm       = null;
+    this.prevPalm   = null;
   }
 
   async start() {
@@ -147,18 +142,25 @@ export class HandTracker {
       return;
     }
 
-    const lm = landmarks[0]; // first hand only
+    const lm = landmarks[0];
 
-    // ── 1. Classify each finger ──────────────────────────────────────────────
-    const thumbUp  = fingerOpen(lm, THUMB_TIP,  THUMB_MCP);
-    const indexUp  = fingerOpen(lm, INDEX_TIP,  INDEX_MCP);
-    const midDown  = !fingerOpen(lm, MIDDLE_TIP, MIDDLE_MCP);
-    const ringDown = !fingerOpen(lm, RING_TIP,   RING_MCP);
-    const pinkyDown= !fingerOpen(lm, PINKY_TIP,  PINKY_MCP);
+    // ── 1. Per-finger open/closed with hysteresis ────────────────────────────
+    for (const f of FINGERS) {
+      const tipDist = dist2d(lm[f.tip], lm[WRIST]);
+      const pipDist = dist2d(lm[f.pip], lm[WRIST]);
+      if (pipDist < 1e-6) continue;
+      const ratio = tipDist / pipDist;
 
-    const allClosed = !thumbUp && !indexUp && midDown && ringDown && pinkyDown;
-    const allOpen   = thumbUp && indexUp && !midDown && !ringDown && !pinkyDown;
-    const zoomReady = midDown && ringDown && pinkyDown; // 3 down, thumb+index free
+      const wasOpen = this.fingerOpen[f.name];
+      if ( wasOpen && ratio < CLOSE_THRESHOLD) this.fingerOpen[f.name] = false;
+      if (!wasOpen && ratio > OPEN_THRESHOLD)  this.fingerOpen[f.name] = true;
+    }
+
+    const fo = this.fingerOpen;
+    const allClosed = !fo.thumb && !fo.index && !fo.middle && !fo.ring && !fo.pinky;
+    const allOpen   =  fo.thumb &&  fo.index &&  fo.middle &&  fo.ring &&  fo.pinky;
+    // 3 fingers down, thumb+index free (either open or in motion)
+    const zoomReady = !fo.middle && !fo.ring && !fo.pinky && !allClosed;
 
     // ── 2. Smooth palm centroid ──────────────────────────────────────────────
     const rawPalm = palmMirrored(lm);
@@ -170,32 +172,30 @@ export class HandTracker {
 
     let mode = "idle";
 
-    // ── 3. ZOOM — only when 3 fingers are down ───────────────────────────────
-    if (zoomReady && !allClosed) {
-      const pd = pinchDist(lm);
+    // ── 3. ZOOM — middle+ring+pinky down, track thumb↔index distance ─────────
+    if (zoomReady) {
+      const pd   = pinchDist(lm);
       const prev = this.pinch;
       this.pinch = this.pinch === null
         ? pd
         : this.pinch + (pd - this.pinch) * PINCH_SMOOTH;
 
       if (prev !== null) {
-        const delta = this.pinch - prev; // +ve = thumb/index apart = zoom in
+        const delta = this.pinch - prev; // +ve = apart = zoom in
         if (Math.abs(delta) > ZOOM_DEAD) {
           const step   = Math.min(Math.abs(delta) * ZOOM_SCALE, ZOOM_MAX);
-          // Apart (delta>0) → zoom IN  → factor < 1 (camera closer = orb bigger)
-          // Together (delta<0) → zoom OUT → factor > 1
           const factor = delta > 0
-            ? Math.max(1.0 - step, 0.85)
-            : Math.min(1.0 + step, 1.15);
+            ? Math.max(1.0 - step, 0.85)   // zoom in  (camera closer)
+            : Math.min(1.0 + step, 1.15);  // zoom out (camera further)
           this.callbacks.onZoom(factor);
           mode = delta > 0 ? "zoom-in" : "zoom-out";
         }
       }
     } else {
-      this.pinch = null; // reset when gesture changes
+      this.pinch = null;
     }
 
-    // ── 4. ROTATE — only when all 5 fingers closed (fist) ───────────────────
+    // ── 4. ROTATE — all 5 closed (fist) + hand moves ────────────────────────
     if (allClosed && this.prevPalm) {
       let dx = this.palm.x - this.prevPalm.x;
       let dy = this.palm.y - this.prevPalm.y;
@@ -207,8 +207,7 @@ export class HandTracker {
       }
     }
 
-    // ── 5. All open → idle (no action) ──────────────────────────────────────
-    // (allOpen already results in mode = "idle" — nothing to do)
+    // allOpen → mode stays "idle"
 
     this._emitStatus({ hands: landmarks.length, mode });
   }
@@ -229,76 +228,100 @@ export class HandTracker {
 
     const lm = landmarks[0];
     const m  = this.lastStatus.mode;
+    const fo = this.fingerOpen;
 
-    // Finger open/closed state
-    const states = [
-      { tip: THUMB_TIP,  mcp: THUMB_MCP,  open: fingerOpen(lm, THUMB_TIP,  THUMB_MCP)  },
-      { tip: INDEX_TIP,  mcp: INDEX_MCP,  open: fingerOpen(lm, INDEX_TIP,  INDEX_MCP)  },
-      { tip: MIDDLE_TIP, mcp: MIDDLE_MCP, open: fingerOpen(lm, MIDDLE_TIP, MIDDLE_MCP) },
-      { tip: RING_TIP,   mcp: RING_MCP,   open: fingerOpen(lm, RING_TIP,   RING_MCP)   },
-      { tip: PINKY_TIP,  mcp: PINKY_MCP,  open: fingerOpen(lm, PINKY_TIP,  PINKY_MCP)  },
-    ];
+    const allClosed = !fo.thumb && !fo.index && !fo.middle && !fo.ring && !fo.pinky;
 
-    const allClosed = states.every(s => !s.open);
-    const palm = this.palm ?? palmMirrored(lm);
-    const pcx  = palm.x * width;
-    const pcy  = palm.y * height;
+    // Helper: mirror x
+    const mx = (lm, id) => (1 - lm[id].x) * width;
+    const my = (lm, id) => lm[id].y * height;
 
-    states.forEach(({ tip, open }) => {
-      const fx = (1 - lm[tip].x) * width;
-      const fy = lm[tip].y * height;
+    // Draw full skeleton for each finger (MCP → PIP → DIP → TIP)
+    FINGERS.forEach(f => {
+      const open = fo[f.name];
 
-      // Color: green = active open finger, dim = closed finger
-      let dotColor;
-      if (m === "zoom-in")       dotColor = open ? "#66ffcc" : "rgba(102,255,204,0.2)";
-      else if (m === "zoom-out") dotColor = open ? "#ffaa44" : "rgba(255,170,68,0.2)";
-      else if (m === "spin")     dotColor = "#7fe8ff";
-      else                       dotColor = open ? "rgba(127,232,255,0.55)" : "rgba(127,232,255,0.18)";
+      // Color per finger state and mode
+      let color;
+      if (m === "zoom-in")       color = open ? "#66ffcc" : "rgba(102,255,204,0.25)";
+      else if (m === "zoom-out") color = open ? "#ffaa44" : "rgba(255,170,68,0.25)";
+      else if (m === "spin")     color = "#7fe8ff";
+      else                       color = open ? "rgba(127,232,255,0.7)" : "rgba(127,232,255,0.22)";
 
-      // Fan line palm → tip
-      ctx.strokeStyle = dotColor;
-      ctx.lineWidth   = (m !== "idle") ? 1.5 : 1;
+      const joints = [WRIST, f.mcp, f.pip, f.dip, f.tip];
+      // Remove duplicate (thumb pip == dip)
+      const unique = [...new Set(joints)];
+
+      // Draw skeleton line through all joints
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = open ? 2 : 1.2;
       ctx.beginPath();
-      ctx.moveTo(pcx, pcy);
-      ctx.lineTo(fx, fy);
+      unique.forEach((id, i) => {
+        const x = mx(lm, id), y = my(lm, id);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
       ctx.stroke();
 
-      // Tip dot — bigger for open fingers when active
-      const dotSize = (m !== "idle" && open) ? 7 : open ? 4 : 3;
-      ctx.beginPath();
-      ctx.arc(fx, fy, dotSize, 0, Math.PI * 2);
-      ctx.fillStyle = dotColor;
-      ctx.fill();
+      // Draw each joint dot
+      unique.forEach((id, i) => {
+        const x = mx(lm, id), y = my(lm, id);
+        const isTip = id === f.tip;
+        ctx.beginPath();
+        ctx.arc(x, y, isTip ? (open ? 6 : 3.5) : 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = isTip ? color : "rgba(127,232,255,0.4)";
+        ctx.fill();
+      });
     });
 
-    // Palm centroid
-    const palmColor = allClosed ? "#7fe8ff" : "rgba(77,184,255,0.35)";
+    // Draw palm connections (knuckle bar across MCPs)
+    const mcps = [2, 5, 9, 13, 17];
+    ctx.strokeStyle = "rgba(127,232,255,0.15)";
+    ctx.lineWidth   = 1;
     ctx.beginPath();
-    ctx.arc(pcx, pcy, allClosed ? 7 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = palmColor;
-    ctx.fill();
+    mcps.forEach((id, i) => {
+      const x = mx(lm, id), y = my(lm, id);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
 
-    // Ring when fist (rotate mode)
-    if (allClosed) {
+    // Wrist to thumb MCP and wrist to pinky MCP
+    [[WRIST, 2], [WRIST, 17]].forEach(([a, b]) => {
       ctx.beginPath();
-      ctx.arc(pcx, pcy, 14, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(127,232,255,0.4)";
-      ctx.lineWidth   = 1.5;
+      ctx.moveTo(mx(lm, a), my(lm, a));
+      ctx.lineTo(mx(lm, b), my(lm, b));
       ctx.stroke();
+    });
+
+    // Palm centroid ring (fist = bright)
+    if (this.palm) {
+      const pcx = this.palm.x * width;
+      const pcy = this.palm.y * height;
+      ctx.beginPath();
+      ctx.arc(pcx, pcy, allClosed ? 7 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = allClosed ? "#7fe8ff" : "rgba(77,184,255,0.3)";
+      ctx.fill();
+      if (allClosed) {
+        ctx.beginPath();
+        ctx.arc(pcx, pcy, 14, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(127,232,255,0.4)";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+      }
     }
 
-    // Status label
-    const label = m === "zoom-in"  ? "ZOOM IN"
-                : m === "zoom-out" ? "ZOOM OUT"
-                : m === "spin"     ? "ROTATING"
+    // Mode label
+    const label = m === "zoom-in"  ? "ZOOM IN +"
+                : m === "zoom-out" ? "ZOOM OUT -"
+                : m === "spin"     ? "ROTATING ↻"
                 :                    "";
     if (label) {
-      ctx.font      = "bold 9px monospace";
-      ctx.fillStyle = m === "zoom-in"  ? "#66ffcc"
-                    : m === "zoom-out" ? "#ffaa44"
-                    :                    "#7fe8ff";
-      ctx.textAlign = "center";
-      ctx.fillText(label, width / 2, 14);
+      ctx.font         = "bold 10px monospace";
+      ctx.textAlign    = "center";
+      ctx.fillStyle    = m === "zoom-in"  ? "#66ffcc"
+                       : m === "zoom-out" ? "#ffaa44" : "#7fe8ff";
+      ctx.shadowColor  = ctx.fillStyle;
+      ctx.shadowBlur   = 6;
+      ctx.fillText(label, width / 2, 15);
+      ctx.shadowBlur   = 0;
     }
   }
 }
