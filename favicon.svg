@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <rect width="32" height="32" fill="#000000"/>
+  <!-- Outer glow rings -->
+  <circle cx="16" cy="16" r="14" fill="none" stroke="#7fe8ff" stroke-width="0.3" opacity="0.2"/>
+  <circle cx="16" cy="16" r="11" fill="none" stroke="#7fe8ff" stroke-width="0.4" opacity="0.35"/>
+  <!-- Core orb -->
+  <radialGradient id="orbGrad" cx="42%" cy="38%" r="55%">
+    <stop offset="0%"  stop-color="#b8f0ff" stop-opacity="1"/>
+    <stop offset="40%" stop-color="#7fe8ff" stop-opacity="0.9"/>
+    <stop offset="100%" stop-color="#1a6080" stop-opacity="0.8"/>
+  </radialGradient>
+  <circle cx="16" cy="16" r="8" fill="url(#orbGrad)"/>
+  <!-- Inner highlight -->
+  <circle cx="13.5" cy="13" r="2.5" fill="white" opacity="0.25"/>
+</svg>
