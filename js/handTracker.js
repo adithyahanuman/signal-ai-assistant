@@ -77,12 +77,11 @@ export class HandTracker {
   }
 
   _clear() {
+    // Start all fingers as OPEN so first frame with open hand triggers rotation
     this.fingerOpen = { thumb: true, index: true, middle: true, ring: true, pinky: true };
     this.pinch      = null;
     this.palm       = null;
     this.prevPalm   = null;
-    this.indexTip   = null;   // smoothed index fingertip for rotation
-    this.prevIndex  = null;
   }
 
   async start() {
@@ -159,29 +158,19 @@ export class HandTracker {
     }
 
     const fo = this.fingerOpen;
-    // Index-only pointing: only index open, all others closed → ROTATE
-    const indexPointing = fo.index && !fo.middle && !fo.ring && !fo.pinky;
-    // Open hand (4 fingers): kept for reference but rotation now uses index pointer
+    // Rotation: index+middle+ring+pinky all open (thumb excluded — unreliable with wrist method)
     const handOpen  =  fo.index &&  fo.middle &&  fo.ring &&  fo.pinky;
     const allClosed = !fo.index && !fo.middle && !fo.ring && !fo.pinky;
-    // Zoom: middle+ring+pinky closed, thumb+index free (but index must not be sole pointer)
-    const zoomReady = !fo.middle && !fo.ring && !fo.pinky && !allClosed && !indexPointing;
+    // Zoom: middle+ring+pinky closed, thumb+index free
+    const zoomReady = !fo.middle && !fo.ring && !fo.pinky && !allClosed;
 
-    // ── 2. Smooth palm centroid ────────────────────────────────────────────────
+    // ── 2. Smooth palm centroid ──────────────────────────────────────────────
     const rawPalm = palmMirrored(lm);
     this.prevPalm = this.palm ? { ...this.palm } : null;
     this.palm = this.palm === null
       ? rawPalm
       : { x: this.palm.x + (rawPalm.x - this.palm.x) * PALM_SMOOTH,
           y: this.palm.y + (rawPalm.y - this.palm.y) * PALM_SMOOTH };
-
-    // ── Smooth index fingertip position (for rotation tracking) ────────────────
-    const rawIdx = { x: 1 - lm[FINGERS[1].tip].x, y: lm[FINGERS[1].tip].y };
-    this.prevIndex = this.indexTip ? { ...this.indexTip } : null;
-    this.indexTip = this.indexTip === null
-      ? rawIdx
-      : { x: this.indexTip.x + (rawIdx.x - this.indexTip.x) * PALM_SMOOTH,
-          y: this.indexTip.y + (rawIdx.y - this.indexTip.y) * PALM_SMOOTH };
 
     let mode = "idle";
 
@@ -208,10 +197,10 @@ export class HandTracker {
       this.pinch = null;
     }
 
-    // ── 4. ROTATE — index finger only pointing + move tip → spin orb ───────────
-    if (indexPointing && this.prevIndex) {
-      let dx = this.indexTip.x - this.prevIndex.x;
-      let dy = this.indexTip.y - this.prevIndex.y;
+    // ── 4. ROTATE — 4 fingers open (index+middle+ring+pinky) + hand moves ─────────
+    if (handOpen && !zoomReady && this.prevPalm) {
+      let dx = this.palm.x - this.prevPalm.x;
+      let dy = this.palm.y - this.prevPalm.y;
       dx = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dx));
       dy = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dy));
       if (Math.abs(dx) > ROTATE_DEAD || Math.abs(dy) > ROTATE_DEAD) {
@@ -304,45 +293,27 @@ export class HandTracker {
       ctx.stroke();
     });
 
-    // ── Index pointer indicator (rotation mode) ──────────────────────────────
-    const indexPointing = fo.index && !fo.middle && !fo.ring && !fo.pinky;
-
-    if (indexPointing && this.indexTip) {
-      const ix = this.indexTip.x * width;
-      const iy = this.indexTip.y * height;
-      // Large glowing dot on index tip
-      ctx.beginPath();
-      ctx.arc(ix, iy, 10, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(127,232,255,0.15)";
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(ix, iy, 6, 0, Math.PI * 2);
-      ctx.fillStyle = m === "spin" ? "#7fe8ff" : "rgba(127,232,255,0.6)";
-      ctx.fill();
-      // Direction arrow hint (small cross)
-      ctx.strokeStyle = "rgba(127,232,255,0.5)";
-      ctx.lineWidth = 1;
-      [[-10,0],[10,0],[0,-10],[0,10]].forEach(([dx, dy]) => {
-        ctx.beginPath();
-        ctx.moveTo(ix, iy);
-        ctx.lineTo(ix + dx, iy + dy);
-        ctx.stroke();
-      });
-    }
-
-    // Palm centroid dot (subtle)
+    // Palm centroid ring (open hand = bright, ready to rotate)
     if (this.palm) {
+      const pcx = this.palm.x * width;
+      const pcy = this.palm.y * height;
       ctx.beginPath();
-      ctx.arc(this.palm.x * width, this.palm.y * height, 3, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(77,184,255,0.25)";
+      ctx.arc(pcx, pcy, allOpen ? 7 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = allOpen ? "#7fe8ff" : "rgba(77,184,255,0.3)";
       ctx.fill();
+      if (allOpen) {
+        ctx.beginPath();
+        ctx.arc(pcx, pcy, 14, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(127,232,255,0.4)";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+      }
     }
 
     // Mode label
     const label = m === "zoom-in"  ? "ZOOM IN +"
                 : m === "zoom-out" ? "ZOOM OUT -"
                 : m === "spin"     ? "ROTATING ↻"
-                : indexPointing    ? "☝ POINT TO ROTATE"
                 :                    "";
     if (label) {
       ctx.font         = "bold 10px monospace";
