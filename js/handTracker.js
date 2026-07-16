@@ -27,10 +27,11 @@ const FINGERS = [
 const PALM_IDS = [0, 5, 9, 13, 17];
 
 // ── Finger open/closed detection ─────────────────────────────────────────────
-// A finger is OPEN when TIP is farther from WRIST than PIP.
-// Hysteresis: needs to cross threshold by a margin to change state (kills flicker).
-const OPEN_THRESHOLD  = 1.02;  // ratio to flip from closed → open
-const CLOSE_THRESHOLD = 0.94;  // ratio to flip from open → closed
+// Finger open/closed detection — hysteresis prevents flickering
+// ratio = dist(TIP, WRIST) / dist(PIP, WRIST)
+// Open: tip further from wrist than pip joint
+const OPEN_THRESHOLD  = 0.95;  // ratio to flip closed→open (lowered for easier detection)
+const CLOSE_THRESHOLD = 0.85;  // ratio to flip open→closed
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 const PINCH_SMOOTH  = 0.25;   // EMA on thumb-index distance
@@ -38,8 +39,8 @@ const PALM_SMOOTH   = 0.35;   // EMA on palm centroid
 const ZOOM_DEAD     = 0.005;  // min delta to count as intentional zoom
 const ZOOM_SCALE    = 20.0;   // delta → zoom factor
 const ZOOM_MAX      = 0.10;   // max zoom step per frame
-const ROTATE_DEAD   = 0.005;
-const ROTATE_SCALE  = 2.5;
+const ROTATE_DEAD   = 0.004;
+const ROTATE_SCALE  = 3.5;   // increased for responsive rotation
 const ROTATE_MAX    = 0.025;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -76,8 +77,8 @@ export class HandTracker {
   }
 
   _clear() {
-    // Persistent finger open/closed states (hysteresis)
-    this.fingerOpen = { thumb: false, index: false, middle: false, ring: false, pinky: false };
+    // Start all fingers as OPEN so first frame with open hand triggers rotation
+    this.fingerOpen = { thumb: true, index: true, middle: true, ring: true, pinky: true };
     this.pinch      = null;
     this.palm       = null;
     this.prevPalm   = null;
@@ -157,9 +158,10 @@ export class HandTracker {
     }
 
     const fo = this.fingerOpen;
-    const allClosed = !fo.thumb && !fo.index && !fo.middle && !fo.ring && !fo.pinky;
-    const allOpen   =  fo.thumb &&  fo.index &&  fo.middle &&  fo.ring &&  fo.pinky;
-    // 3 fingers down, thumb+index free (either open or in motion)
+    // Rotation: index+middle+ring+pinky all open (thumb excluded — unreliable with wrist method)
+    const handOpen  =  fo.index &&  fo.middle &&  fo.ring &&  fo.pinky;
+    const allClosed = !fo.index && !fo.middle && !fo.ring && !fo.pinky;
+    // Zoom: middle+ring+pinky closed, thumb+index free
     const zoomReady = !fo.middle && !fo.ring && !fo.pinky && !allClosed;
 
     // ── 2. Smooth palm centroid ──────────────────────────────────────────────
@@ -195,8 +197,8 @@ export class HandTracker {
       this.pinch = null;
     }
 
-    // ── 4. ROTATE — all 5 OPEN + hand moves → spin orb ──────────────────────
-    if (allOpen && this.prevPalm) {
+    // ── 4. ROTATE — 4 fingers open (index+middle+ring+pinky) + hand moves ─────────
+    if (handOpen && !zoomReady && this.prevPalm) {
       let dx = this.palm.x - this.prevPalm.x;
       let dy = this.palm.y - this.prevPalm.y;
       dx = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dx));
