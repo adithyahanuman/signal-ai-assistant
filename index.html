@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>S.I.G.N.A.L. — Adaptive Neural Intelligence System</title>
+  <meta name="description" content="SIGNAL is a next-generation adaptive neural intelligence system — real-time voice, vision, and reasoning in your browser." />
+  <meta property="og:title" content="S.I.G.N.A.L. — Adaptive Neural Intelligence" />
+  <meta property="og:description" content="Real-time voice, vision, and autonomous reasoning. A presence, not a product." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="favicon.ico" />
+
+  <style>
+    /* ═══════════════════════════════════════════════
+       RESET & BASE
+    ═══════════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      background: #000;
+      color: #cce8f0;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { cursor: pointer; border: none; background: none; font: inherit; }
+
+    /* ═══════════════════════════════════════════════
+       DESIGN TOKENS — light blue palette
+    ═══════════════════════════════════════════════ */
+    :root {
+      --bg:           #000000;
+      --cyan:         #7fe8ff;
+      --cyan-dim:     rgba(127,232,255,0.55);
+      --cyan-faint:   rgba(127,232,255,0.1);
+      --blue:         #4db8ff;
+      --hot:          #b8f0ff;
+      --text:         #cce8f0;
+      --text-dim:     rgba(180,225,240,0.62);
+      --text-muted:   rgba(180,225,240,0.35);
+      --border:       rgba(127,232,255,0.18);
+      --border-bright:rgba(127,232,255,0.4);
+      --mono:         'Space Mono', 'Courier New', monospace;
+    }
+
+    /* ═══════════════════════════════════════════════
+       FIXED ORB BACKGROUND
+    ═══════════════════════════════════════════════ */
+    #hero-orb-container {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      background: #000;
+      cursor: default;
+    }
+    #hero-orb-container canvas { display: block; width: 100% !important; height: 100% !important; }
+
+    /* Atmosphere overlays */
+    .atm-vignette {
+      position: fixed; inset: 0; pointer-events: none; z-index: 2;
+      background: radial-gradient(ellipse 80% 80% at 50% 50%, transparent 30%, rgba(0,0,0,0.85) 100%);
+    }
+    .atm-grain {
+      position: fixed; inset: 0; pointer-events: none; z-index: 3;
+      opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 180px;
+      mix-blend-mode: screen;
+    }
+    .atm-scanlines {
+      position: fixed; inset: 0; pointer-events: none; z-index: 3;
+      background: repeating-linear-gradient(
+        to bottom, transparent 0px, transparent 2px,
+        rgba(0,0,0,0.1) 2px, rgba(0,0,0,0.1) 4px
+      );
+    }
+
+    /* ═══════════════════════════════════════════════
+       SCROLLABLE CONTENT LAYER
+    ═══════════════════════════════════════════════ */
+    .landing-root { position: relative; z-index: 10; }
+
+    /* ═══════════════════════════════════════════════
+       NAVIGATION
+    ═══════════════════════════════════════════════ */
+    .site-header {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.5rem 2.5rem;
+      border-bottom: 1px solid rgba(127,232,255,0.07);
+      backdrop-filter: blur(2px);
+    }
+
+    .logo {
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.5em;
+      color: var(--cyan);
+      text-shadow: 0 0 14px rgba(127,232,255,0.5);
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .logo::before {
+      content: '';
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--cyan); }
+      50%        { opacity: 0.35; box-shadow: 0 0 3px var(--cyan); }
+    }
+
+    .site-nav {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.2em;
+    }
+    .site-nav a { color: var(--text-dim); transition: color 0.2s, text-shadow 0.2s; }
+    .site-nav a:hover { color: var(--cyan); text-shadow: 0 0 10px rgba(127,232,255,0.4); }
+
+    .btn-launch {
+      border: 1px solid var(--border-bright);
+      padding: 0.5rem 1.25rem;
+      color: var(--cyan);
+      border-radius: 2px;
+      background: rgba(127,232,255,0.05);
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .btn-launch:hover {
+      background: rgba(127,232,255,0.1);
+      box-shadow: 0 0 14px rgba(127,232,255,0.2);
+    }
+
+    /* ═══════════════════════════════════════════════
+       SHARED SECTION LAYOUT
+    ═══════════════════════════════════════════════ */
+    .section {
+      position: relative;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8rem 2.5rem;
+    }
+
+    /* ═══════════════════════════════════════════════
+       HERO SECTION
+    ═══════════════════════════════════════════════ */
+    #hero { min-height: 100vh; flex-direction: column; text-align: center; gap: 0; }
+
+    .hero-system-tag {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.6em;
+      color: var(--cyan-dim);
+      text-transform: uppercase;
+      margin-bottom: 2.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+    }
+    .hero-system-tag::before, .hero-system-tag::after {
+      content: '';
+      display: block;
+      width: 60px; height: 1px;
+      background: linear-gradient(to right, transparent, var(--cyan-dim));
+    }
+    .hero-system-tag::after { background: linear-gradient(to left, transparent, var(--cyan-dim)); }
+
+    .hero-title {
+      font-family: var(--mono);
+      font-size: clamp(3rem, 10vw, 8rem);
+      font-weight: 700;
+      letter-spacing: 0.25em;
+      color: var(--cyan);
+      text-shadow:
+        0 0 40px rgba(127,232,255,0.45),
+        0 0 80px rgba(77,184,255,0.2),
+        0 0 120px rgba(30,120,255,0.08);
+      line-height: 1;
+      margin-bottom: 0.5rem;
+    }
+
+    .hero-title-sub {
+      font-family: var(--mono);
+      font-size: clamp(0.6rem, 1.2vw, 0.85rem);
+      letter-spacing: 0.3em;
+      color: rgba(127,232,255,0.38);
+      margin-bottom: 2.5rem;
+      text-transform: uppercase;
+    }
+
+    .hero-desc {
+      max-width: 38rem;
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      font-weight: 300;
+      line-height: 1.75;
+      color: var(--text-dim);
+      margin: 0 auto 3rem;
+    }
+    .hero-desc strong { color: var(--text); font-weight: 500; }
+
+    /* Stats row */
+    .hero-stats {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 3rem;
+      margin-bottom: 3rem;
+      flex-wrap: wrap;
+    }
+    .stat-item { display: flex; flex-direction: column; align-items: center; gap: 0.25rem; }
+    .stat-value {
+      font-family: var(--mono);
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--cyan);
+      text-shadow: 0 0 14px rgba(127,232,255,0.35);
+    }
+    .stat-label {
+      font-family: var(--mono);
+      font-size: 9px;
+      letter-spacing: 0.3em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+    .stat-divider { width: 1px; height: 32px; background: var(--border); }
+
+    /* CTA buttons */
+    .hero-cta { display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap; }
+
+    .btn-primary {
+      position: relative;
+      padding: 0.875rem 2rem;
+      background: var(--cyan);
+      color: #000;
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.3em;
+      border-radius: 2px;
+      transition: all 0.2s;
+      text-transform: uppercase;
+      overflow: hidden;
+    }
+    .btn-primary::before {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 60%);
+    }
+    .btn-primary:hover {
+      background: var(--hot);
+      box-shadow: 0 0 30px rgba(127,232,255,0.4), 0 0 60px rgba(77,184,255,0.15);
+      transform: translateY(-1px);
+    }
+
+    .btn-outline {
+      padding: 0.875rem 2rem;
+      border: 1px solid var(--border-bright);
+      color: var(--cyan);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.3em;
+      border-radius: 2px;
+      background: rgba(127,232,255,0.04);
+      transition: all 0.2s;
+      text-transform: uppercase;
+    }
+    .btn-outline:hover {
+      background: rgba(127,232,255,0.09);
+      box-shadow: 0 0 14px rgba(127,232,255,0.18);
+      transform: translateY(-1px);
+    }
+
+    /* Scroll indicator */
+    .scroll-indicator {
+      position: absolute;
+      bottom: 2.5rem; left: 50%;
+      transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.4em;
+      color: var(--text-muted);
+      animation: fade-pulse 3s ease-in-out infinite;
+    }
+    .scroll-indicator::after {
+      content: '';
+      display: block; width: 1px; height: 40px;
+      background: linear-gradient(to bottom, var(--cyan-dim), transparent);
+      animation: scroll-line 2s ease-in-out infinite;
+    }
+    @keyframes fade-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.8; } }
+    @keyframes scroll-line {
+      0%   { transform: scaleY(0); transform-origin: top; }
+      50%  { transform: scaleY(1); transform-origin: top; }
+      51%  { transform: scaleY(1); transform-origin: bottom; }
+      100% { transform: scaleY(0); transform-origin: bottom; }
+    }
+
+    /* ═══════════════════════════════════════════════
+       MARQUEE TICKER
+    ═══════════════════════════════════════════════ */
+    .ticker-wrap {
+      position: relative; z-index: 10;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      overflow: hidden; padding: 0.75rem 0;
+    }
+    .ticker-track {
+      display: flex; gap: 0;
+      animation: ticker-scroll 35s linear infinite;
+      white-space: nowrap;
+    }
+    .ticker-item {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.25em;
+      color: rgba(127,232,255,0.42);
+      padding: 0 3rem; flex-shrink: 0;
+    }
+    .ticker-item span { color: var(--cyan); margin: 0 0.5rem; }
+    @keyframes ticker-scroll { 0% { transform: translateX(0); } 100% { transform: translateX(-50%); } }
+
+    /* ═══════════════════════════════════════════════
+       FEATURE SECTIONS
+    ═══════════════════════════════════════════════ */
+    .feature-section {
+      position: relative; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 7rem 2.5rem;
+    }
+    .feature-inner {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 5rem; max-width: 72rem; width: 100%; align-items: center;
+    }
+    .feature-inner.reverse { direction: rtl; }
+    .feature-inner.reverse > * { direction: ltr; }
+
+    .feature-section::before {
+      content: '';
+      position: absolute; top: 0; left: 2.5rem; right: 2.5rem; height: 1px;
+      background: linear-gradient(to right, transparent, var(--border), transparent);
+    }
+
+    .feature-tag {
+      display: inline-flex; align-items: center; gap: 0.75rem;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.4em;
+      color: var(--cyan-dim); margin-bottom: 1.5rem;
+    }
+    .feature-tag::before {
+      content: ''; display: block; width: 24px; height: 1px; background: var(--cyan-dim);
+    }
+
+    .feature-number {
+      font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.3em;
+      color: rgba(127,232,255,0.25); margin-bottom: 1.75rem;
+    }
+
+    .feature-h2 {
+      font-size: clamp(1.8rem, 3.5vw, 2.75rem); font-weight: 400;
+      line-height: 1.2; letter-spacing: -0.01em; color: var(--text); margin-bottom: 1.5rem;
+    }
+    .feature-h2 em {
+      font-style: normal; color: var(--cyan);
+      text-shadow: 0 0 20px rgba(127,232,255,0.25);
+    }
+
+    .feature-body { font-size: 1rem; line-height: 1.8; color: var(--text-dim); margin-bottom: 2rem; }
+
+    /* Feature card */
+    .feature-card {
+      position: relative; border: 1px solid var(--border);
+      border-radius: 4px; background: rgba(127,232,255,0.02);
+      overflow: hidden; aspect-ratio: 1; max-width: 380px; margin: auto;
+    }
+    .feature-card::before {
+      content: ''; position: absolute; inset: 0;
+      background: radial-gradient(ellipse at 50% 50%, rgba(77,184,255,0.05) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .feature-card .corner {
+      position: absolute; width: 16px; height: 16px;
+      border-color: var(--cyan); border-style: solid; opacity: 0.4;
+    }
+    .feature-card .corner-tl { top: 10px; left: 10px; border-width: 1px 0 0 1px; }
+    .feature-card .corner-tr { top: 10px; right: 10px; border-width: 1px 1px 0 0; }
+    .feature-card .corner-bl { bottom: 10px; left: 10px; border-width: 0 0 1px 1px; }
+    .feature-card .corner-br { bottom: 10px; right: 10px; border-width: 0 1px 1px 0; }
+
+    .card-header {
+      position: relative; z-index: 1;
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid rgba(127,232,255,0.08);
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em;
+      color: rgba(127,232,255,0.38);
+    }
+    .card-header .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); opacity: 0.55; }
+
+    .card-body {
+      position: relative; z-index: 1; padding: 2rem;
+      display: flex; flex-direction: column; gap: 1rem;
+    }
+
+    .data-line {
+      display: flex; align-items: center; gap: 1rem;
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.15em;
+      color: rgba(127,232,255,0.32);
+    }
+    .data-line .bar {
+      flex: 1; height: 2px; background: rgba(127,232,255,0.07);
+      border-radius: 1px; position: relative; overflow: hidden;
+    }
+    .data-line .bar-fill {
+      position: absolute; inset: 0;
+      background: linear-gradient(to right, rgba(77,184,255,0.6), rgba(127,232,255,0.9));
+      transform-origin: left;
+      animation: bar-grow 3s ease-in-out infinite;
+    }
+    @keyframes bar-grow {
+      0%   { transform: scaleX(0.1); opacity: 0.25; }
+      50%  { transform: scaleX(1);   opacity: 0.8; }
+      100% { transform: scaleX(0.1); opacity: 0.25; }
+    }
+    .data-line:nth-child(2) .bar-fill { animation-delay: 0.4s; }
+    .data-line:nth-child(3) .bar-fill { animation-delay: 0.8s; }
+    .data-line:nth-child(4) .bar-fill { animation-delay: 1.2s; }
+    .data-line .val { min-width: 3rem; text-align: right; color: var(--cyan-dim); }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.3rem 0.75rem;
+      border: 1px solid rgba(127,232,255,0.2); border-radius: 2px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em;
+      color: var(--cyan-dim); background: rgba(127,232,255,0.04);
+    }
+    .status-badge .dot-live {
+      width: 5px; height: 5px; border-radius: 50%; background: var(--cyan);
+      animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+
+    .spec-list { list-style: none; display: flex; flex-direction: column; gap: 0.75rem; }
+    .spec-list li {
+      display: flex; align-items: flex-start; gap: 0.75rem;
+      font-size: 0.875rem; color: var(--text-dim); line-height: 1.5;
+    }
+    .spec-list li::before {
+      content: '//'; font-family: var(--mono); font-size: 10px;
+      color: var(--cyan-dim); flex-shrink: 0; margin-top: 0.15em;
+    }
+
+    /* ═══════════════════════════════════════════════
+       METRICS BAND
+    ═══════════════════════════════════════════════ */
+    .metrics-band {
+      position: relative; z-index: 10;
+      padding: 4rem 2.5rem;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(6px);
+    }
+    .metrics-inner {
+      max-width: 72rem; margin: auto;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 2rem;
+    }
+    .metric-item {
+      text-align: center; display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    .metric-value {
+      font-family: var(--mono);
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700; color: var(--cyan);
+      text-shadow: 0 0 18px rgba(127,232,255,0.3);
+      line-height: 1;
+    }
+    .metric-unit { font-family: var(--mono); font-size: 0.75rem; color: rgba(127,232,255,0.45); letter-spacing: 0.2em; }
+    .metric-desc { font-size: 0.8rem; color: var(--text-muted); letter-spacing: 0.05em; }
+    .metric-divider { position: absolute; top: 20%; bottom: 20%; right: 0; width: 1px; background: var(--border); }
+
+    /* ═══════════════════════════════════════════════
+       CLOSING
+    ═══════════════════════════════════════════════ */
+    #closing { flex-direction: column; text-align: center; gap: 2rem; }
+
+    .closing-eyebrow {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.5em;
+      color: var(--cyan-dim); text-transform: uppercase;
+    }
+    .closing-h2 {
+      font-size: clamp(2.5rem, 6vw, 5rem); font-weight: 400;
+      line-height: 1.1; letter-spacing: -0.02em;
+    }
+    .closing-h2 span {
+      font-family: var(--mono); color: var(--cyan);
+      text-shadow: 0 0 30px rgba(127,232,255,0.35);
+    }
+    .closing-sub { font-size: 1.1rem; color: var(--text-dim); max-width: 32rem; line-height: 1.7; }
+
+    .closing-terminal {
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.2em;
+      color: rgba(127,232,255,0.38);
+      padding: 1rem 2rem; border: 1px solid var(--border); border-radius: 2px;
+      background: rgba(127,232,255,0.02); display: inline-block;
+    }
+    .closing-terminal .prompt { color: var(--cyan-dim); }
+    .closing-terminal .cmd    { color: var(--cyan); }
+    .closing-terminal .cursor {
+      display: inline-block; width: 8px; height: 1em;
+      background: var(--cyan); vertical-align: middle;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* ═══════════════════════════════════════════════
+       FOOTER
+    ═══════════════════════════════════════════════ */
+    .site-footer {
+      position: relative; z-index: 10;
+      padding: 2rem 2.5rem;
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em;
+      color: var(--text-muted);
+    }
+    .footer-links { display: flex; gap: 2rem; }
+    .footer-links a { color: var(--text-muted); transition: color 0.2s; }
+    .footer-links a:hover { color: var(--cyan); }
+
+    /* ═══════════════════════════════════════════════
+       ANIMATIONS
+    ═══════════════════════════════════════════════ */
+    .fade-up {
+      opacity: 0; transform: translateY(30px);
+      transition: opacity 0.8s ease, transform 0.8s ease;
+    }
+    .fade-up.visible { opacity: 1; transform: translateY(0); }
+
+    /* ═══════════════════════════════════════════════
+       RESPONSIVE
+    ═══════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+      .site-header { padding: 1.25rem 1.5rem; }
+      .site-nav { gap: 1rem; font-size: 10px; }
+      .feature-inner { grid-template-columns: 1fr; gap: 3rem; }
+      .feature-inner.reverse { direction: ltr; }
+      .metrics-inner { grid-template-columns: repeat(2, 1fr); }
+      .hero-stats { gap: 1.5rem; }
+      .stat-divider { display: none; }
+      .feature-card { max-width: 100%; aspect-ratio: auto; min-height: 280px; }
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+      "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/ScrollTrigger.min.js"></script>
+</head>
+<body>
+
+  <!-- Fixed light-blue orb background -->
+  <div id="hero-orb-container"></div>
+  <div class="atm-vignette"></div>
+  <div class="atm-grain"></div>
+  <div class="atm-scanlines"></div>
+
+  <div class="landing-root">
+
+    <!-- NAVIGATION -->
+    <header class="site-header">
+      <a href="index.html" class="logo">SIGNAL</a>
+      <nav class="site-nav">
+        <a href="#voice">Voice</a>
+        <a href="#vision">Vision</a>
+        <a href="#reasoning">Reasoning</a>
+        <a href="login.html">Sign in</a>
+        <a href="app.html" class="btn-launch">LAUNCH</a>
+      </nav>
+    </header>
+
+    <!-- HERO -->
+    <section id="hero" class="section">
+      <div style="display:flex;flex-direction:column;align-items:center;text-align:center;max-width:56rem;">
+        <div class="hero-system-tag">ADAPTIVE NEURAL INTELLIGENCE SYSTEM</div>
+        <h1 class="hero-title">S.I.G.N.A.L.</h1>
+        <p class="hero-title-sub">Synchronized Intelligence for Global Neural &amp; Adaptive Learning</p>
+        <p class="hero-desc">
+          An <strong>autonomous reasoning system</strong> that speaks, sees, and thinks in real time.
+          Not an assistant. Not a chatbot. A presence that exists alongside you —
+          perpetually aware, continuously learning.
+        </p>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-value">&lt;80<span style="font-size:0.9rem;">ms</span></div>
+            <div class="stat-label">Voice Latency</div>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <div class="stat-value">4K</div>
+            <div class="stat-label">Vision Feed</div>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <div class="stat-value">∞</div>
+            <div class="stat-label">Context Window</div>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <div class="stat-value">100%</div>
+            <div class="stat-label">On-device Private</div>
+          </div>
+        </div>
+        <div class="hero-cta">
+          <a href="app.html" class="btn-primary">INITIALIZE SIGNAL</a>
+          <a href="#voice"   class="btn-outline">EXPLORE SYSTEMS</a>
+        </div>
+      </div>
+      <div class="scroll-indicator">SCROLL</div>
+    </section>
+
+    <!-- TICKER -->
+    <div class="ticker-wrap">
+      <div class="ticker-track">
+        <span class="ticker-item">VOICE STREAM <span>✦</span> ACTIVE</span>
+        <span class="ticker-item">NEURAL LATENCY <span>✦</span> 78ms</span>
+        <span class="ticker-item">VISION MODULE <span>✦</span> ONLINE</span>
+        <span class="ticker-item">GESTURE TRACKING <span>✦</span> READY</span>
+        <span class="ticker-item">MEMORY <span>✦</span> 128K CTX</span>
+        <span class="ticker-item">ENCRYPTION <span>✦</span> AES-256</span>
+        <span class="ticker-item">UPTIME <span>✦</span> 99.97%</span>
+        <span class="ticker-item">NODES <span>✦</span> 42 REGIONS</span>
+        <span class="ticker-item">VOICE STREAM <span>✦</span> ACTIVE</span>
+        <span class="ticker-item">NEURAL LATENCY <span>✦</span> 78ms</span>
+        <span class="ticker-item">VISION MODULE <span>✦</span> ONLINE</span>
+        <span class="ticker-item">GESTURE TRACKING <span>✦</span> READY</span>
+        <span class="ticker-item">MEMORY <span>✦</span> 128K CTX</span>
+        <span class="ticker-item">ENCRYPTION <span>✦</span> AES-256</span>
+        <span class="ticker-item">UPTIME <span>✦</span> 99.97%</span>
+        <span class="ticker-item">NODES <span>✦</span> 42 REGIONS</span>
+      </div>
+    </div>
+
+    <!-- 01 / VOICE -->
+    <section id="voice" class="feature-section">
+      <div class="feature-inner fade-up">
+        <div>
+          <div class="feature-number">SYS.MODULE_01</div>
+          <div class="feature-tag">ACOUSTIC PROCESSING</div>
+          <h2 class="feature-h2">Speak freely.<br /><em>It never stops listening.</em></h2>
+          <p class="feature-body">
+            Continuous streaming speech recognition with sub-80ms round-trip latency.
+            No wake words. No push-to-talk. SIGNAL maintains a persistent acoustic context —
+            it understands not just what you say, but how you say it.
+          </p>
+          <ul class="spec-list">
+            <li>Streaming ASR with real-time transcription</li>
+            <li>Multi-speaker diarization &amp; voice ID</li>
+            <li>Ambient noise cancellation at model level</li>
+            <li>Prosody analysis for emotional context</li>
+          </ul>
+        </div>
+        <div>
+          <div class="feature-card">
+            <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+            <div class="card-header"><div class="dot"></div>ACOUSTIC_FEED.SYS &nbsp;·&nbsp; LIVE</div>
+            <div class="card-body">
+              <div class="status-badge"><div class="dot-live"></div>VOICE STREAM ACTIVE</div>
+              <div style="height:1.5rem;"></div>
+              <div class="data-line">FREQ_BAND_0–4KHz<div class="bar"><div class="bar-fill"></div></div><div class="val">98%</div></div>
+              <div class="data-line">FUNDAMENTAL_F0  <div class="bar"><div class="bar-fill"></div></div><div class="val">175Hz</div></div>
+              <div class="data-line">SNR_RATIO       <div class="bar"><div class="bar-fill"></div></div><div class="val">42dB</div></div>
+              <div class="data-line">ASR_CONFIDENCE  <div class="bar"><div class="bar-fill"></div></div><div class="val">99.1%</div></div>
+              <div style="margin-top:1rem;font-family:var(--mono);font-size:9px;color:rgba(127,232,255,0.28);letter-spacing:0.2em;">LATENCY &nbsp;·&nbsp; 78ms &nbsp;·&nbsp; STREAM OK</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 02 / VISION -->
+    <section id="vision" class="feature-section">
+      <div class="feature-inner reverse fade-up">
+        <div>
+          <div class="feature-card">
+            <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+            <div class="card-header"><div class="dot"></div>VISION_CORE.SYS &nbsp;·&nbsp; SCANNING</div>
+            <div class="card-body">
+              <div class="status-badge"><div class="dot-live"></div>OPTICAL SCAN ACTIVE</div>
+              <div style="height:1.5rem;"></div>
+              <div class="data-line">OBJECT_DETECTION<div class="bar"><div class="bar-fill"></div></div><div class="val">247</div></div>
+              <div class="data-line">TEXT_OCR_BLOCKS <div class="bar"><div class="bar-fill"></div></div><div class="val">89</div></div>
+              <div class="data-line">FACE_VECTORS    <div class="bar"><div class="bar-fill"></div></div><div class="val">3</div></div>
+              <div class="data-line">SCENE_CONFIDENCE<div class="bar"><div class="bar-fill"></div></div><div class="val">97.4%</div></div>
+              <div style="margin-top:1rem;font-family:var(--mono);font-size:9px;color:rgba(127,232,255,0.28);letter-spacing:0.2em;">FEED &nbsp;·&nbsp; 4K30fps &nbsp;·&nbsp; GROUNDED</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="feature-number">SYS.MODULE_02</div>
+          <div class="feature-tag">OPTICAL INTELLIGENCE</div>
+          <h2 class="feature-h2">Your world becomes<br /><em>its perception.</em></h2>
+          <p class="feature-body">
+            SIGNAL's vision core processes your camera feed frame-by-frame — detecting objects,
+            reading text, identifying faces, and building a semantic map of your environment.
+            Every answer is grounded in what's actually in front of you.
+          </p>
+          <ul class="spec-list">
+            <li>Real-time object detection &amp; spatial mapping</li>
+            <li>OCR for text, code, equations, and diagrams</li>
+            <li>Scene graph construction for contextual reasoning</li>
+            <li>Gesture recognition via MediaPipe hand tracking</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- METRICS BAND -->
+    <div class="metrics-band">
+      <div class="metrics-inner">
+        <div class="metric-item" style="position:relative;">
+          <div class="metric-value">&lt;80<span class="metric-unit">ms</span></div>
+          <div class="metric-desc">Voice-to-response latency</div>
+          <div class="metric-divider"></div>
+        </div>
+        <div class="metric-item" style="position:relative;">
+          <div class="metric-value">4K<span class="metric-unit">30fps</span></div>
+          <div class="metric-desc">Vision feed resolution</div>
+          <div class="metric-divider"></div>
+        </div>
+        <div class="metric-item" style="position:relative;">
+          <div class="metric-value">42<span class="metric-unit">regions</span></div>
+          <div class="metric-desc">Global deployment nodes</div>
+          <div class="metric-divider"></div>
+        </div>
+        <div class="metric-item">
+          <div class="metric-value">0<span class="metric-unit">logs</span></div>
+          <div class="metric-desc">Data retention on-device</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 03 / REASONING -->
+    <section id="reasoning" class="feature-section">
+      <div class="feature-inner fade-up">
+        <div>
+          <div class="feature-number">SYS.MODULE_03</div>
+          <div class="feature-tag">NEURAL REASONING ENGINE</div>
+          <h2 class="feature-h2">Watch the <em>mind ignite</em><br />as it reasons.</h2>
+          <p class="feature-body">
+            SIGNAL's reasoning core isn't a black box. Each inference step is visualized —
+            attention heads lighting up across the knowledge graph, thoughts forming in real time.
+            You don't just get an answer. You witness the thinking.
+          </p>
+          <ul class="spec-list">
+            <li>Chain-of-thought with live reasoning display</li>
+            <li>Multi-modal fusion: voice + vision + memory</li>
+            <li>Uncertainty quantification per claim</li>
+            <li>Autonomous tool use &amp; web retrieval</li>
+          </ul>
+        </div>
+        <div>
+          <div class="feature-card">
+            <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+            <div class="card-header"><div class="dot"></div>NEURAL_CORE.SYS &nbsp;·&nbsp; ACTIVE</div>
+            <div class="card-body">
+              <div class="status-badge"><div class="dot-live"></div>REASONING IN PROGRESS</div>
+              <div style="height:1.5rem;"></div>
+              <div class="data-line">ATTN_HEADS_ACTIVE<div class="bar"><div class="bar-fill"></div></div><div class="val">96/96</div></div>
+              <div class="data-line">CHAIN_OF_THOUGHT <div class="bar"><div class="bar-fill"></div></div><div class="val">step 7</div></div>
+              <div class="data-line">TOOL_CALLS       <div class="bar"><div class="bar-fill"></div></div><div class="val">3</div></div>
+              <div class="data-line">CONFIDENCE       <div class="bar"><div class="bar-fill"></div></div><div class="val">94.2%</div></div>
+              <div style="margin-top:1rem;font-family:var(--mono);font-size:9px;color:rgba(127,232,255,0.28);letter-spacing:0.2em;">TOKENS &nbsp;·&nbsp; 4096 CTX &nbsp;·&nbsp; THINKING</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 04 / LOCAL -->
+    <section id="local" class="feature-section">
+      <div class="feature-inner reverse fade-up">
+        <div>
+          <div class="feature-card">
+            <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+            <div class="card-header"><div class="dot"></div>PRIVACY_SHIELD.SYS &nbsp;·&nbsp; ARMED</div>
+            <div class="card-body">
+              <div class="status-badge"><div class="dot-live"></div>SECURE ENCLAVE ACTIVE</div>
+              <div style="height:1.5rem;"></div>
+              <div class="data-line">ENCRYPTION       <div class="bar"><div class="bar-fill"></div></div><div class="val">AES-256</div></div>
+              <div class="data-line">DATA_EGRESS      <div class="bar"><div class="bar-fill" style="animation:none;transform:scaleX(0);opacity:0.1;"></div></div><div class="val">NONE</div></div>
+              <div class="data-line">LOCAL_MODEL      <div class="bar"><div class="bar-fill"></div></div><div class="val">7B</div></div>
+              <div class="data-line">MEMORY_PURGE     <div class="bar"><div class="bar-fill"></div></div><div class="val">ON EXIT</div></div>
+              <div style="margin-top:1rem;font-family:var(--mono);font-size:9px;color:rgba(127,232,255,0.28);letter-spacing:0.2em;">DEVICE-LOCAL &nbsp;·&nbsp; ZERO LOGS</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="feature-number">SYS.MODULE_04</div>
+          <div class="feature-tag">SOVEREIGN COMPUTE</div>
+          <h2 class="feature-h2">Your data never<br /><em>leaves the device.</em></h2>
+          <p class="feature-body">
+            Sensitive inferences route to a fully local model running in a secure enclave.
+            Conversations are ephemeral — purged on exit, never logged, never transmitted.
+            Intelligence without surveillance.
+          </p>
+          <ul class="spec-list">
+            <li>7B parameter model running fully on-device</li>
+            <li>AES-256 encrypted memory buffers</li>
+            <li>Zero telemetry — no data egress by default</li>
+            <li>Airgap mode for classified environments</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 05 / AVAILABILITY -->
+    <section id="availability" class="feature-section">
+      <div class="feature-inner fade-up">
+        <div>
+          <div class="feature-number">SYS.MODULE_05</div>
+          <div class="feature-tag">GLOBAL INFRASTRUCTURE</div>
+          <h2 class="feature-h2">42 regions.<br /><em>Zero single point of failure.</em></h2>
+          <p class="feature-body">
+            SIGNAL's cloud backbone spans 42 regions with sub-millisecond failover.
+            When a node goes dark, the conversation continues mid-sentence — seamlessly
+            handed off to the nearest healthy replica.
+          </p>
+          <ul class="spec-list">
+            <li>Active-active mesh across 42 global regions</li>
+            <li>99.97% SLA with automatic failover</li>
+            <li>Edge inference nodes for ultra-low latency</li>
+            <li>Real-time capacity rebalancing via ML scheduler</li>
+          </ul>
+        </div>
+        <div>
+          <div class="feature-card">
+            <div class="corner corner-tl"></div><div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div><div class="corner corner-br"></div>
+            <div class="card-header"><div class="dot"></div>GLOBAL_NET.SYS &nbsp;·&nbsp; ONLINE</div>
+            <div class="card-body">
+              <div class="status-badge"><div class="dot-live"></div>ALL NODES OPERATIONAL</div>
+              <div style="height:1.5rem;"></div>
+              <div class="data-line">ACTIVE_REGIONS   <div class="bar"><div class="bar-fill"></div></div><div class="val">42/42</div></div>
+              <div class="data-line">AVG_LATENCY      <div class="bar"><div class="bar-fill"></div></div><div class="val">14ms</div></div>
+              <div class="data-line">FAILOVER_SPEED   <div class="bar"><div class="bar-fill"></div></div><div class="val">0.8ms</div></div>
+              <div class="data-line">UPTIME_30D       <div class="bar"><div class="bar-fill"></div></div><div class="val">99.97%</div></div>
+              <div style="margin-top:1rem;font-family:var(--mono);font-size:9px;color:rgba(127,232,255,0.28);letter-spacing:0.2em;">MESH &nbsp;·&nbsp; ACTIVE-ACTIVE &nbsp;·&nbsp; HEALTHY</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CLOSING CTA -->
+    <section id="closing" class="section fade-up">
+      <div class="closing-eyebrow">BEGIN SEQUENCE</div>
+      <h2 class="closing-h2">The future<br />thinks in <span>real time.</span></h2>
+      <p class="closing-sub">
+        SIGNAL is not a product. It is a system — designed to perceive, reason, and respond
+        as a continuous presence in your world.
+      </p>
+      <div class="closing-terminal">
+        <span class="prompt">signal@core:~$ </span><span class="cmd">./initialize --mode=full</span><span class="cursor"></span>
+      </div>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;">
+        <a href="app.html"   class="btn-primary" style="font-size:11px;letter-spacing:0.3em;">LAUNCH SIGNAL</a>
+        <a href="login.html" class="btn-outline"  style="font-size:11px;letter-spacing:0.3em;">AUTHENTICATE</a>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer class="site-footer">
+      <span>S.I.G.N.A.L. &nbsp;·&nbsp; v1.0.0 &nbsp;·&nbsp; BUILD 2026</span>
+      <div class="footer-links">
+        <a href="#voice">Systems</a>
+        <a href="login.html">Access</a>
+        <a href="app.html">Launch</a>
+      </div>
+      <span>ALL SYSTEMS NOMINAL</span>
+    </footer>
+
+  </div><!-- /landing-root -->
+
+  <script type="module" src="js/main-landing.js"></script>
+  <script>
+    const observer = new IntersectionObserver(
+      (entries) => entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); }),
+      { threshold: 0.15 }
+    );
+    document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+  </script>
+
+</body>
+</html>

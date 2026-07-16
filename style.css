@@ -1,0 +1,69 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIGNAL — style.css
+   Global base styles for the SIGNAL neural orb interface.
+   Individual pages carry page-specific styles inline.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap');
+
+/* ── Reset ──────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  background: #000;
+  color: #e8d5b0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; border: none; background: none; font: inherit; }
+
+/* ── Design tokens ──────────────────────────────────────────────────────── */
+:root {
+  --bg:            #000000;
+  --cyan:           #7fe8ff;
+  --cyan-dim:       rgba(127,232,255,0.55);
+  --cyan-faint:     rgba(127,232,255,0.1);
+  --blue:           #4db8ff;
+  --hot:            #b8f0ff;
+  --text:           #cce8f0;
+  --text-dim:       rgba(180,225,240,0.62);
+  --text-muted:     rgba(180,225,240,0.35);
+  --border:         rgba(127,232,255,0.18);
+  --border-bright:  rgba(127,232,255,0.4);
+  --mono:           'Space Mono', 'Courier New', monospace;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   APP PAGE (app.html)
+   ══════════════════════════════════════════════════════════════════════════ */
+.app-root {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+  color: var(--text);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LOGIN PAGE (login.html) — shared base
+   ══════════════════════════════════════════════════════════════════════════ */
+.login-root {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+  background: #000;
+  color: var(--text);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LANDING PAGE (index.html) — shared base
+   ══════════════════════════════════════════════════════════════════════════ */
+.landing-root {
+  position: relative;
+  background: transparent;
+  color: var(--text);
+  overflow-x: hidden;
+}

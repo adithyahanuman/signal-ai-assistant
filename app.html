@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SIGNAL — Assistant</title>
+  <meta name="description" content="Talk to SIGNAL in real time." />
+  <meta property="og:title" content="SIGNAL — Assistant" />
+  <meta property="og:description" content="Your live voice-and-vision assistant." />
+
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="favicon.ico" />
+
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+
+    /* Full-screen orb container (orb creates + appends its own canvas) */
+    .app-root { position: relative; width: 100vw; height: 100dvh; overflow: hidden; background: #000; }
+
+    #app-orb-container {
+      position: absolute; inset: 0;
+      cursor: grab;
+    }
+    #app-orb-container:active { cursor: grabbing; }
+    #app-orb-container canvas { display: block; }
+
+    /* ── Film grain + scanlines ── */
+    .overlay-grain {
+      position: fixed; inset: 0; pointer-events: none; z-index: 10;
+      opacity: 0.05;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 150px;
+      mix-blend-mode: screen;
+    }
+    .overlay-scanlines {
+      position: fixed; inset: 0; pointer-events: none; z-index: 11;
+      background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(0,0,0,0.15) 2px, rgba(0,0,0,0.15) 4px);
+      opacity: 0.3;
+    }
+    .overlay-vignette {
+      position: fixed; inset: 0; pointer-events: none; z-index: 9;
+      background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.7) 100%);
+    }
+
+    /* —— SIGNAL HUD —— */
+    .hud {
+      position: fixed; z-index: 20;
+      color: #7fe8ff;
+      font-family: 'Space Mono', 'Courier New', monospace;
+      user-select: none;
+    }
+    .hud-title {
+      top: 24px; left: 24px;
+      font-size: 13px; letter-spacing: 0.35em; opacity: 0.7;
+      text-shadow: 0 0 10px rgba(127,232,255,0.7);
+      pointer-events: none;
+    }
+    .hud-title::after {
+      content: '';
+      display: block; margin-top: 6px;
+      width: 120px; height: 1px;
+      background: linear-gradient(to right, rgba(127,232,255,0.7), transparent);
+    }
+    .hud-hint {
+      bottom: 24px; left: 24px;
+      font-size: 11px; line-height: 1.7; letter-spacing: 0.1em;
+      opacity: 0.5; text-shadow: 0 0 8px rgba(127,232,255,0.5);
+      pointer-events: none;
+    }
+    .hud-hint .key {
+      display: inline-block; padding: 0 4px;
+      border: 1px solid rgba(127,232,255,0.4); border-radius: 3px;
+      margin-right: 4px; font-size: 10px;
+    }
+    .hud-controls {
+      bottom: 24px; right: 24px;
+      display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+    }
+    .hud-btn {
+      min-width: 44px; height: 44px; padding: 0 12px;
+      background: rgba(0,12,20,0.55);
+      border: 1px solid rgba(127,232,255,0.38); border-radius: 4px;
+      color: #7fe8ff; font-family: 'Space Mono', 'Courier New', monospace;
+      font-size: 15px; font-weight: bold; letter-spacing: 0.08em;
+      cursor: pointer; backdrop-filter: blur(2px);
+      text-shadow: 0 0 6px rgba(127,232,255,0.6);
+      box-shadow: 0 0 12px rgba(77,184,255,0.1) inset;
+      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+    }
+    .hud-btn:hover {
+      background: rgba(0,30,50,0.7);
+      border-color: rgba(183,240,255,0.85);
+      box-shadow: 0 0 14px rgba(127,232,255,0.3), 0 0 12px rgba(77,184,255,0.15) inset;
+    }
+    .hud-btn:active { background: rgba(0,50,80,0.8); }
+    .hud-btn[aria-pressed="true"] { background: rgba(0,60,90,0.6); border-color: #b8f0ff; color: #b8f0ff; }
+    .hud-btn:disabled { opacity: 0.4; cursor: default; }
+    .hud-row { display: flex; gap: 8px; }
+    .hud-error { font-size: 11px; letter-spacing: 0.15em; color: #ff5533; text-shadow: 0 0 8px rgba(255,60,30,0.7); }
+
+    /* ── Camera preview panel ── */
+    #camera-panel {
+      position: relative; width: 208px; height: 156px;
+      display: none;
+      border: 1px solid rgba(127,232,255,0.38); border-radius: 4px;
+      overflow: hidden; background: #000810;
+      box-shadow: 0 0 16px rgba(77,184,255,0.12);
+    }
+    #camera-panel.visible { display: block; }
+    #camera-video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; transform: scaleX(-1);
+      filter: sepia(0.2) hue-rotate(160deg) saturate(1.5) brightness(0.75) contrast(1.1);
+      opacity: 0.85;
+    }
+    #camera-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #camera-status {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 3px 6px; font-size: 10px; letter-spacing: 0.15em;
+      color: #b8f0ff; background: rgba(0,8,20,0.65);
+      text-shadow: 0 0 6px rgba(127,232,255,0.7);
+    }
+
+    /* ── Keep the original SIGNAL top-bar + aside ── */
+    .app-header {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 25;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.5rem 2rem;
+    }
+    .logo { font-family: 'Space Mono', monospace; letter-spacing: 0.3em; font-size: 13px; color: #7fe8ff; }
+    .app-mode-indicator {
+      font-family: 'Space Mono', monospace; font-size: 11px;
+      letter-spacing: 0.2em; color: rgba(127,232,255,0.5);
+    }
+    .app-mode-indicator span { color: #7fe8ff; }
+
+    @media (max-width: 600px) { .hud-hint { display: none; } }
+  </style>
+
+  <!-- Three.js + addons + MediaPipe import map -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+      "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+      "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/vision_bundle.mjs"
+    }
+  }
+  </script>
+</head>
+<body>
+<div class="app-root">
+
+  <!-- Full-screen SIGNAL orb (interactive: drag spin, scroll zoom, hand gestures) -->
+  <div id="app-orb-container"></div>
+
+  <!-- Atmosphere overlays -->
+  <div class="overlay-vignette"></div>
+  <div class="overlay-grain"></div>
+  <div class="overlay-scanlines"></div>
+
+  <!-- Top bar -->
+  <header class="app-header">
+    <a href="index.html" class="logo">SIGNAL</a>
+    <div class="app-mode-indicator">
+      MODE / <span id="mode-label">STANDBY</span>
+    </div>
+  </header>
+
+  <!-- Hint bar — bottom left -->
+  <div class="hud hud-hint" id="hud-hint-bar">
+    <div>
+      <span class="key">DRAG</span> spin&nbsp;&nbsp;
+      <span class="key">SCROLL</span> zoom
+    </div>
+    <div>
+      <span class="key">G</span> hand gestures&nbsp;&nbsp;
+      <span class="key">R</span> reset&nbsp;&nbsp;
+      <span class="key">+/−</span> zoom
+    </div>
+  </div>
+
+  <!-- Controls — bottom right -->
+  <div class="hud hud-controls">
+    <!-- Camera preview panel -->
+    <div id="camera-panel">
+      <video id="camera-video" muted playsinline></video>
+      <canvas id="camera-overlay" width="208" height="156"></canvas>
+      <div id="camera-status">SHOW HANDS</div>
+    </div>
+
+    <!-- Error line -->
+    <div class="hud-error" id="hud-error"></div>
+
+    <!-- Gesture toggle -->
+    <div class="hud-row">
+      <button type="button" class="hud-btn" id="gesture-btn"
+              aria-pressed="false">GESTURES OFF</button>
+    </div>
+
+    <!-- Zoom / reset -->
+    <div class="hud-row">
+      <button type="button" class="hud-btn" id="zoom-in-btn"  aria-label="Zoom in">+</button>
+      <button type="button" class="hud-btn" id="zoom-out-btn" aria-label="Zoom out">−</button>
+      <button type="button" class="hud-btn" id="reset-btn">RESET</button>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="js/main-app.js"></script>
+</body>
+</html>

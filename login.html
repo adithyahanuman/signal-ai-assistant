@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Authenticate — S.I.G.N.A.L.</title>
+  <meta name="description" content="Authenticate to access your SIGNAL neural interface." />
+  <meta property="og:title" content="Authenticate — S.I.G.N.A.L." />
+  <meta property="og:description" content="Resume your session with SIGNAL." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="favicon.ico" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      background: #000;
+      color: #cce8f0;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    button { cursor: pointer; border: none; font: inherit; }
+
+    :root {
+      --cyan:         #7fe8ff;
+      --cyan-dim:     rgba(127,232,255,0.55);
+      --cyan-faint:   rgba(127,232,255,0.1);
+      --blue:         #4db8ff;
+      --hot:          #b8f0ff;
+      --text:         #cce8f0;
+      --text-dim:     rgba(180,225,240,0.58);
+      --text-muted:   rgba(180,225,240,0.32);
+      --border:       rgba(127,232,255,0.18);
+      --border-bright:rgba(127,232,255,0.4);
+      --mono:         'Space Mono', 'Courier New', monospace;
+    }
+
+    /* ── Layout ── */
+    .login-root { display: flex; width: 100vw; height: 100vh; }
+
+    /* ── LEFT: Form Panel ── */
+    .login-form-panel {
+      position: relative;
+      width: 100%; max-width: 480px; flex-shrink: 0;
+      display: flex; flex-direction: column; justify-content: space-between;
+      padding: 2.5rem 3rem;
+      background: #000;
+      border-right: 1px solid rgba(127,232,255,0.1);
+      overflow-y: auto; z-index: 10;
+    }
+    .login-form-panel::before {
+      content: ''; position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(127,232,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(127,232,255,0.025) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+    }
+
+    /* ── Logo ── */
+    .logo {
+      position: relative;
+      display: flex; align-items: center; gap: 0.75rem;
+      font-family: var(--mono); font-size: 11px; letter-spacing: 0.55em;
+      color: var(--cyan);
+      text-shadow: 0 0 14px rgba(127,232,255,0.45);
+    }
+    .logo::before {
+      content: ''; display: inline-block;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--cyan); box-shadow: 0 0 8px var(--cyan);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--cyan); }
+      50%       { opacity: 0.35; box-shadow: 0 0 3px var(--cyan); }
+    }
+
+    /* ── Form inner ── */
+    .login-form-inner {
+      position: relative; max-width: 340px; width: 100%;
+      margin: auto 0; padding: 2rem 0;
+    }
+
+    /* System badge */
+    .auth-system-badge {
+      display: inline-flex; align-items: center; gap: 0.5rem;
+      padding: 0.3rem 0.75rem;
+      border: 1px solid rgba(127,232,255,0.22); border-radius: 2px;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em;
+      color: var(--cyan-dim); background: rgba(127,232,255,0.04);
+      margin-bottom: 2rem;
+    }
+    .badge-dot {
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--cyan); animation: pulse-dot 1.5s ease-in-out infinite;
+    }
+
+    /* Heading */
+    .login-h1 {
+      font-family: var(--mono); font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 700;
+      letter-spacing: 0.05em; color: var(--cyan);
+      text-shadow: 0 0 20px rgba(127,232,255,0.25);
+      margin-bottom: 0.5rem; line-height: 1.2;
+    }
+    .login-sub {
+      font-size: 0.875rem; color: var(--text-dim); margin-bottom: 2.5rem; line-height: 1.6;
+    }
+
+    /* Form fields */
+    .login-form { display: flex; flex-direction: column; gap: 1.5rem; }
+    .field-group { display: flex; flex-direction: column; gap: 0.4rem; }
+    .field-label {
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.4em;
+      color: var(--cyan-dim); text-transform: uppercase;
+    }
+    .field-wrap {
+      position: relative; border-bottom: 1px solid var(--border);
+      transition: border-color 0.25s;
+    }
+    .field-wrap::after {
+      content: ''; position: absolute; bottom: -1px; left: 0;
+      width: 0; height: 1px; background: var(--cyan); transition: width 0.3s ease;
+    }
+    .field-wrap:focus-within { border-color: rgba(127,232,255,0.5); }
+    .field-wrap:focus-within::after { width: 100%; }
+
+    .field-prefix {
+      position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+      font-family: var(--mono); font-size: 11px; color: var(--cyan-dim);
+      pointer-events: none;
+    }
+    .field-input {
+      width: 100%; background: transparent; border: none;
+      padding: 0.65rem 0 0.65rem 1.75rem;
+      color: var(--text); font-family: var(--mono); font-size: 0.9rem;
+      letter-spacing: 0.05em; outline: none; caret-color: var(--cyan);
+    }
+    .field-input::placeholder { color: rgba(180,225,240,0.2); }
+
+    /* Submit button */
+    .login-submit {
+      position: relative; width: 100%; margin-top: 0.5rem; padding: 0.875rem;
+      background: var(--cyan); color: #000;
+      font-family: var(--mono); font-size: 11px; font-weight: 700;
+      letter-spacing: 0.4em; border-radius: 2px; text-transform: uppercase;
+      transition: all 0.2s; overflow: hidden;
+    }
+    .login-submit::before {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.18) 0%, transparent 60%);
+    }
+    .login-submit:hover {
+      background: var(--hot);
+      box-shadow: 0 0 30px rgba(127,232,255,0.4), 0 0 60px rgba(77,184,255,0.15);
+      transform: translateY(-1px);
+    }
+    .login-submit:active { transform: translateY(0); }
+
+    /* OR divider */
+    .or-divider {
+      display: flex; align-items: center; gap: 1rem;
+      font-family: var(--mono); font-size: 9px; letter-spacing: 0.3em; color: var(--text-muted);
+    }
+    .or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* Ghost button */
+    .btn-ghost {
+      width: 100%; padding: 0.75rem;
+      border: 1px solid var(--border); color: var(--text-dim);
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.3em;
+      border-radius: 2px; background: transparent;
+      text-align: center; transition: all 0.2s; cursor: pointer; display: block;
+    }
+    .btn-ghost:hover {
+      border-color: var(--border-bright); color: var(--cyan);
+      background: rgba(127,232,255,0.04);
+    }
+
+    /* Footer note */
+    .login-footer-note {
+      font-size: 0.75rem; color: var(--text-muted); margin-top: 1.5rem;
+      font-family: var(--mono); letter-spacing: 0.05em;
+    }
+    .login-footer-note a { color: var(--cyan-dim); transition: color 0.2s; }
+    .login-footer-note a:hover { color: var(--cyan); }
+
+    /* System status */
+    .system-status {
+      position: relative; border: 1px solid var(--border); border-radius: 2px;
+      padding: 1rem; background: rgba(127,232,255,0.02); margin-top: 1.5rem;
+    }
+    .system-status-title {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.4em;
+      color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;
+    }
+    .sys-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.3rem 0; font-family: var(--mono); font-size: 9px; letter-spacing: 0.15em;
+      color: var(--text-muted); border-bottom: 1px solid rgba(127,232,255,0.05);
+    }
+    .sys-row:last-child { border-bottom: none; }
+    .sys-val { color: var(--cyan-dim); }
+    .sys-val.ok { color: #66ddb8; }
+
+    /* Copyright */
+    .login-copyright {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.3em; color: var(--text-muted);
+    }
+
+    /* ── RIGHT: Orb Panel ── */
+    .login-scene-panel {
+      display: none; flex: 1; position: relative; overflow: hidden; background: #000;
+    }
+    @media (min-width: 768px) { .login-scene-panel { display: block; } }
+
+    #login-orb-container { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #login-orb-container canvas { display: block; width: 100% !important; height: 100% !important; }
+
+    .login-orb-vignette {
+      position: absolute; inset: 0; pointer-events: none; z-index: 4;
+      background:
+        linear-gradient(to right, rgba(0,0,0,0.55) 0%, transparent 30%),
+        radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.5) 100%);
+    }
+    .login-orb-grain {
+      position: absolute; inset: 0; pointer-events: none; z-index: 5;
+      opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 150px; mix-blend-mode: screen;
+    }
+    .login-orb-scanlines {
+      position: absolute; inset: 0; pointer-events: none; z-index: 5;
+      background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px);
+    }
+
+    /* Orb caption */
+    .orb-caption {
+      position: absolute; bottom: 2.5rem; left: 50%; transform: translateX(-50%);
+      z-index: 6; text-align: center; pointer-events: none;
+    }
+    .orb-caption-title {
+      font-family: var(--mono); font-size: 10px; letter-spacing: 0.5em;
+      color: rgba(127,232,255,0.45); text-shadow: 0 0 10px rgba(127,232,255,0.25);
+      margin-bottom: 0.5rem;
+    }
+    .orb-caption-title::after {
+      content: ''; display: block; margin: 0.5rem auto 0;
+      width: 60px; height: 1px;
+      background: linear-gradient(to right, transparent, rgba(127,232,255,0.35), transparent);
+    }
+    .orb-caption-sub {
+      font-family: var(--mono); font-size: 8px; letter-spacing: 0.3em;
+      color: rgba(127,232,255,0.22);
+    }
+
+    @media (max-width: 767px) { .login-form-panel { max-width: 100%; padding: 2rem 1.5rem; } }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/",
+      "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+<div class="login-root">
+
+  <!-- LEFT — FORM -->
+  <div class="login-form-panel">
+    <a href="index.html" class="logo">SIGNAL</a>
+
+    <div class="login-form-inner">
+      <div class="auth-system-badge">
+        <div class="badge-dot"></div>
+        SECURE AUTH MODULE &nbsp;·&nbsp; v1.0
+      </div>
+
+      <h1 class="login-h1">AUTHENTICATE<br />YOUR SESSION</h1>
+      <p class="login-sub">
+        Verify your credentials to resume your neural interface session.
+        All authentication is end-to-end encrypted.
+      </p>
+
+      <form id="login-form" class="login-form" novalidate>
+        <div class="field-group">
+          <label class="field-label" for="email">IDENTITY &nbsp;·&nbsp; EMAIL</label>
+          <div class="field-wrap">
+            <span class="field-prefix">&gt;</span>
+            <input id="email" class="field-input" type="email"
+              placeholder="operator@domain.com" autocomplete="email" required />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="password">AUTH KEY &nbsp;·&nbsp; PASSWORD</label>
+          <div class="field-wrap">
+            <span class="field-prefix">#</span>
+            <input id="password" class="field-input" type="password"
+              placeholder="••••••••••••" autocomplete="current-password" required />
+          </div>
+        </div>
+        <button type="submit" class="login-submit">INITIALIZE SESSION</button>
+      </form>
+
+      <div class="or-divider" style="margin-top:1.5rem;">OR</div>
+      <a href="app.html" class="btn-ghost" style="margin-top:0.75rem;">GUEST ACCESS — NO CREDENTIALS</a>
+
+      <p class="login-footer-note">
+        New operator? <a href="app.html">Begin trial sequence →</a>
+      </p>
+
+      <div class="system-status">
+        <div class="system-status-title">SYSTEM STATUS</div>
+        <div class="sys-row"><span>AUTH SERVER</span><span class="sys-val ok">ONLINE</span></div>
+        <div class="sys-row"><span>ENCRYPTION</span><span class="sys-val ok">AES-256</span></div>
+        <div class="sys-row"><span>NEURAL CORE</span><span class="sys-val ok">READY</span></div>
+        <div class="sys-row"><span>SESSION TTL</span><span class="sys-val">24H</span></div>
+      </div>
+    </div>
+
+    <div class="login-copyright">
+      S.I.G.N.A.L. &nbsp;·&nbsp; v1.0 &nbsp;·&nbsp; BUILD 2026 &nbsp;·&nbsp; ALL RIGHTS RESERVED
+    </div>
+  </div>
+
+  <!-- RIGHT — ORB -->
+  <div class="login-scene-panel">
+    <div id="login-orb-container"></div>
+    <div class="login-orb-vignette"></div>
+    <div class="login-orb-grain"></div>
+    <div class="login-orb-scanlines"></div>
+    <div class="orb-caption">
+      <div class="orb-caption-title">SIGNAL NEURAL CORE</div>
+      <div class="orb-caption-sub">ADAPTIVE INTELLIGENCE &nbsp;·&nbsp; ONLINE</div>
+    </div>
+  </div>
+
+</div>
+
+<script type="module" src="js/main-login.js"></script>
+<script>
+  document.querySelectorAll('.field-input').forEach(input => {
+    input.addEventListener('focus', () => {
+      input.closest('.field-wrap').style.borderColor = 'rgba(127,232,255,0.55)';
+    });
+    input.addEventListener('blur', () => {
+      input.closest('.field-wrap').style.borderColor = '';
+    });
+  });
+</script>
+</body>
+</html>
