@@ -1,12 +1,14 @@
-// handTracker.js — SIGNAL gesture engine v4
+// handTracker.js — SIGNAL gesture engine v5
 //
-// ZOOM:   Pinch ratio (thumb↔index distance) tracked over a short window.
-//         If consistently INCREASING over last N frames → fire one zoom-in step.
-//         If consistently DECREASING over last N frames → fire one zoom-out step.
-//         Holds still? Nothing fires. Jitter? Nothing fires.
-//         Works like a button: one deliberate open = one zoom in.
+// ZOOM IN:  Hold fingers OPEN/WIDE  → continuously zooms in while held
+// ZOOM OUT: Hold fingers PINCHED/CLOSED → continuously zooms out while held
+// NEUTRAL:  Relaxed hand in middle zone → no zoom, allows rotation
+// ROTATE:   Move hand (palm centroid) while in neutral zone → rotates orb
 //
-// ROTATE: Palm centroid motion (when no zoom is firing).
+// Pinch ratio = thumb↔index distance / hand scale
+//   Fully open  ≈ 0.7–1.2  → ZOOM IN zone
+//   Neutral     ≈ 0.35–0.7 → dead zone (rotation allowed)
+//   Pinched     ≈ 0–0.30   → ZOOM OUT zone
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -18,17 +20,26 @@ const INDEX_TIP  = 8;
 const MIDDLE_MCP = 9;
 const PALM_IDS   = [0, 5, 9, 13, 17];
 
-// ── Zoom gesture config ───────────────────────────────────────────────────────
-const TREND_WINDOW      = 5;     // frames to confirm a consistent direction
-const TREND_MIN_CHANGE  = 0.018; // total ratio change needed across the window
-const ZOOM_STEP         = 0.92;  // how much to zoom per confirmed gesture (< 1 = in, > 1 = out)
-const ZOOM_COOLDOWN     = 12;    // frames to wait after each zoom fire before next
+// ── Zoom thresholds (tune these if hand size varies) ─────────────────────────
+const ZOOM_IN_THRESHOLD  = 0.65;  // ratio ABOVE this → zoom in  (fingers wide)
+const ZOOM_OUT_THRESHOLD = 0.28;  // ratio BELOW this → zoom out (fingers pinched)
 
-// ── Rotation config ───────────────────────────────────────────────────────────
+// ── Zoom speed ────────────────────────────────────────────────────────────────
+// Applied every ZOOM_INTERVAL frames while gesture is held.
+// factor < 1 = camera closer = orb bigger  (zoom in)
+// factor > 1 = camera further = orb smaller (zoom out)
+const ZOOM_IN_FACTOR    = 0.93;  // zoom in step per interval  (7% closer)
+const ZOOM_OUT_FACTOR   = 1.07;  // zoom out step per interval (7% further)
+const ZOOM_INTERVAL     = 3;     // fire zoom every N frames while held (lower = faster)
+
+// ── Rotation ─────────────────────────────────────────────────────────────────
 const ROTATE_SPEED = 1.6;
 const SMOOTHING    = 0.50;
 const DEAD_ZONE    = 0.007;
 const MAX_DELTA    = 0.020;
+
+// ── Smoothing for pinch ratio (prevents jitter flipping zones) ────────────────
+const PINCH_SMOOTHING = 0.35;   // heavy smoothing on ratio (lower = smoother)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function palmCenter(lm) {
@@ -41,7 +52,7 @@ function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function getPinchRatio(lm) {
+function getRawPinchRatio(lm) {
   const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
   if (scale < 1e-6) return 0.5;
   return dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / scale;
@@ -60,15 +71,15 @@ export class HandTracker {
     this.running       = false;
     this.lastVideoTime = -1;
 
-    this._reset();
+    this._resetState();
     this.lastStatus = { hands: 0, mode: "idle" };
   }
 
-  _reset() {
-    this.grab         = null;   // smoothed palm centroid
+  _resetState() {
+    this.grab         = null;
     this._prevGrab    = null;
-    this.pinchHistory = [];     // rolling window of pinch ratios
-    this.zoomCooldown = 0;      // frames until zoom can fire again
+    this.smoothPinch  = 0.5;   // smoothed pinch ratio, starts neutral
+    this.frameCount   = 0;
   }
 
   async start() {
@@ -106,7 +117,7 @@ export class HandTracker {
     if (this.landmarker) { this.landmarker.close(); this.landmarker = null; }
     if (this.stream)     { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
     this.video.srcObject = null;
-    this._reset();
+    this._resetState();
     const ctx = this.overlay.getContext("2d");
     if (ctx) ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
     this._emitStatus({ hands: 0, mode: "idle" });
@@ -124,18 +135,19 @@ export class HandTracker {
   }
 
   _processHands(landmarks) {
+    this.frameCount++;
+
     if (landmarks.length === 0) {
-      this._reset();
+      this._resetState();
       this._emitStatus({ hands: 0, mode: "idle" });
       return;
     }
 
-    // Always use first detected hand only
-    const lm = landmarks[0];
-    const pr  = getPinchRatio(lm);
+    // Use only first detected hand
+    const lm  = landmarks[0];
     const raw = palmCenter(lm);
 
-    // ── Smooth palm centroid ───────────────────────────────────────────────────
+    // ── Smooth palm centroid ──────────────────────────────────────────────────
     if (!this.grab) {
       this.grab = { x: raw.x, y: raw.y };
     } else {
@@ -143,50 +155,30 @@ export class HandTracker {
       this.grab.y += (raw.y - this.grab.y) * SMOOTHING;
     }
 
-    // ── Rolling pinch history window ──────────────────────────────────────────
-    this.pinchHistory.push(pr);
-    if (this.pinchHistory.length > TREND_WINDOW) {
-      this.pinchHistory.shift();
-    }
+    // ── Smooth pinch ratio (kills zone-boundary jitter) ───────────────────────
+    const rawRatio = getRawPinchRatio(lm);
+    this.smoothPinch += (rawRatio - this.smoothPinch) * PINCH_SMOOTHING;
 
-    // ── Zoom: fire only when trend is consistent across the whole window ───────
+    // ── Determine gesture zone ────────────────────────────────────────────────
     let mode = "idle";
-    if (this.zoomCooldown > 0) {
-      this.zoomCooldown--;
-    }
 
-    if (this.pinchHistory.length === TREND_WINDOW && this.zoomCooldown === 0) {
-      const oldest = this.pinchHistory[0];
-      const newest = this.pinchHistory[TREND_WINDOW - 1];
-      const totalChange = newest - oldest;
-
-      // Check that ALL consecutive pairs move in the same direction (no reversals)
-      let consistent = true;
-      for (let i = 1; i < this.pinchHistory.length; i++) {
-        const step = this.pinchHistory[i] - this.pinchHistory[i - 1];
-        if (Math.sign(step) !== Math.sign(totalChange) && Math.abs(step) > 0.002) {
-          consistent = false;
-          break;
-        }
+    if (this.smoothPinch >= ZOOM_IN_THRESHOLD) {
+      // ── ZOOM IN: fingers wide/open ─────────────────────────────────────────
+      mode = "zoom-in";
+      if (this.frameCount % ZOOM_INTERVAL === 0) {
+        this.callbacks.onZoom(ZOOM_IN_FACTOR);
       }
 
-      if (consistent && Math.abs(totalChange) >= TREND_MIN_CHANGE) {
-        if (totalChange > 0) {
-          // Fingers opened → ZOOM IN (factor < 1 = camera closer = orb bigger)
-          this.callbacks.onZoom(ZOOM_STEP);
-        } else {
-          // Fingers closed → ZOOM OUT (factor > 1 = camera further = orb smaller)
-          this.callbacks.onZoom(1 / ZOOM_STEP);
-        }
-        mode = "zoom";
-        this.zoomCooldown = ZOOM_COOLDOWN;
-        // Clear history so next gesture starts fresh
-        this.pinchHistory = [];
+    } else if (this.smoothPinch <= ZOOM_OUT_THRESHOLD) {
+      // ── ZOOM OUT: fingers pinched/closed ───────────────────────────────────
+      mode = "zoom-out";
+      if (this.frameCount % ZOOM_INTERVAL === 0) {
+        this.callbacks.onZoom(ZOOM_OUT_FACTOR);
       }
-    }
 
-    // ── Rotate: palm centroid motion when not zooming ─────────────────────────
-    if (mode !== "zoom") {
+    } else {
+      // ── NEUTRAL zone: rotation allowed ────────────────────────────────────
+      mode = "idle";
       if (this._prevGrab) {
         let dx = this.grab.x - this._prevGrab.x;
         let dy = this.grab.y - this._prevGrab.y;
@@ -218,26 +210,22 @@ export class HandTracker {
     if (landmarks.length === 0) return;
 
     const lm = landmarks[0];
-    const pr = getPinchRatio(lm);
-
     const tx = (1 - lm[THUMB_TIP].x) * width;
     const ty = lm[THUMB_TIP].y * height;
     const ix = (1 - lm[INDEX_TIP].x) * width;
     const iy = lm[INDEX_TIP].y * height;
 
-    // Detect zoom direction from history trend
-    const history  = this.pinchHistory;
-    const trending = history.length >= 2
-      ? history[history.length - 1] - history[0]
-      : 0;
-    const isActive  = this.zoomCooldown > 0;
-    const lineColor = isActive
-      ? (trending >= 0 ? "#66ffcc" : "#ffaa44")
-      : "rgba(127,232,255,0.6)";
+    // Color shows current zone
+    const r = this.smoothPinch;
+    const isZoomIn  = r >= ZOOM_IN_THRESHOLD;
+    const isZoomOut = r <= ZOOM_OUT_THRESHOLD;
+    const color = isZoomIn  ? "#66ffcc"                 // cyan-green = zoom in
+                : isZoomOut ? "#ffaa44"                 // amber = zoom out
+                :             "rgba(127,232,255,0.55)"; // neutral
 
     // Thumb ↔ index line
-    ctx.strokeStyle = lineColor;
-    ctx.lineWidth   = isActive ? 2.5 : 1.5;
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = (isZoomIn || isZoomOut) ? 2.5 : 1.5;
     ctx.beginPath();
     ctx.moveTo(tx, ty);
     ctx.lineTo(ix, iy);
@@ -245,22 +233,39 @@ export class HandTracker {
 
     // Thumb dot
     ctx.beginPath();
-    ctx.arc(tx, ty, isActive ? 6 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = lineColor;
+    ctx.arc(tx, ty, (isZoomIn || isZoomOut) ? 7 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
 
     // Index dot
     ctx.beginPath();
-    ctx.arc(ix, iy, isActive ? 6 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = lineColor;
+    ctx.arc(ix, iy, (isZoomIn || isZoomOut) ? 7 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
 
-    // Palm centroid
+    // Palm centroid dot
     if (this.grab) {
       ctx.beginPath();
-      ctx.arc(this.grab.x * width, this.grab.y * height, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(77,184,255,0.45)";
+      ctx.arc(this.grab.x * width, this.grab.y * height, 5, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(77,184,255,0.5)";
       ctx.fill();
     }
+
+    // Zoom ratio indicator bar at bottom of overlay
+    const barW = width * 0.6;
+    const barX = (width - barW) / 2;
+    const barY = height - 14;
+    const barH = 4;
+    // Background
+    ctx.fillStyle = "rgba(127,232,255,0.12)";
+    ctx.fillRect(barX, barY, barW, barH);
+    // Fill — ratio mapped 0→1 across bar
+    const fill = Math.min(r / 1.2, 1.0) * barW;
+    ctx.fillStyle = color;
+    ctx.fillRect(barX, barY, fill, barH);
+    // Threshold markers
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.fillRect(barX + (ZOOM_OUT_THRESHOLD / 1.2) * barW, barY - 1, 2, barH + 2);
+    ctx.fillRect(barX + (ZOOM_IN_THRESHOLD  / 1.2) * barW, barY - 1, 2, barH + 2);
   }
 }
