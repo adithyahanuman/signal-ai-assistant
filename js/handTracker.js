@@ -31,27 +31,21 @@ const PINKY_MCP   = 17;
 // Palm anchor IDs — stable across all gestures (never move with fingers)
 const PALM_IDS = [0, 5, 9, 13, 17];
 
-// ── Pinch detection (thumb ↔ index) ─────────────────────────────────────────
+
+// ── Pinch detection (thumb ↔ index) ───────────────────────────────────
 const PINCH_ON  = 0.30;  // ratio below this → pinching
 const PINCH_OFF = 0.44;  // ratio above this → released
 
-// ── Spread detection (finger openness for zoom) ──────────────────────────────
-// We measure average spread of all 4 fingertips away from palm center.
-// Normalized by wrist→middleMCP distance (hand scale).
-// Spread ratio > SPREAD_ZOOM_IN  → zoom in
-// Spread ratio < SPREAD_ZOOM_OUT → zoom out
-// Between → dead band, no zoom
-const SPREAD_ZOOM_IN  = 1.55;  // fingers wide open
-const SPREAD_ZOOM_OUT = 0.90;  // fingers closed/curled
+// Spread thresholds — open hand ≈ 1.2–1.5, closed fist ≈ 0.5–0.7
+const SPREAD_ZOOM_IN  = 1.15;  // fingers fairly open → zoom in
+const SPREAD_ZOOM_OUT = 0.80;  // fingers fairly closed → zoom out
 
-// ── Motion tracking parameters ───────────────────────────────────────────────
+// ── Motion tracking parameters ─────────────────────────────────────────
 const ROTATE_SPEED = 1.8;    // much slower than before (was 5.5)
 const SMOOTHING    = 0.55;   // EMA alpha — lower = smoother but more lag
 const DEAD_ZONE    = 0.006;  // normalized — suppresses micro-jitter
 const MAX_DELTA    = 0.018;  // single-frame clamp — prevents jump artifacts
-
-// Zoom speed for spread gesture
-const ZOOM_SPEED   = 0.018;  // how much to zoom per frame when spreading/closing
+const ZOOM_SPEED   = 0.025;  // zoom amount per frame when spreading/closing
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function palmCenter(lm) {
@@ -71,19 +65,23 @@ function dist2d(a, b) {
  * Computes finger spread ratio for a single hand.
  * Returns the average distance of all 4 fingertips from the palm center,
  * normalized by hand scale (wrist→middleMCP).
+ * All coordinates kept in raw (un-mirrored) landmark space for consistency.
  */
 function fingerSpreadRatio(lm) {
   const handScale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
   if (handScale < 1e-6) return 1.0;
 
-  const pc = palmCenter(lm);
-  // Un-mirror pc.x for comparison with raw landmark coords
-  const pcRaw = { x: 1 - pc.x, y: pc.y };
+  // Palm centroid in raw (un-mirrored) coords
+  let px = 0, py = 0;
+  for (const id of PALM_IDS) { px += lm[id].x; py += lm[id].y; }
+  px /= PALM_IDS.length;
+  py /= PALM_IDS.length;
+  const palmRaw = { x: px, y: py };
 
   const tips = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP];
   let totalDist = 0;
   for (const tip of tips) {
-    totalDist += dist2d(lm[tip], pcRaw);
+    totalDist += dist2d(lm[tip], palmRaw);
   }
   return (totalDist / tips.length) / handScale;
 }
@@ -268,22 +266,21 @@ export class HandTracker {
 
   /**
    * Handle spread/close zoom for a single hand's spread ratio.
-   * Returns mode string.
+   * factor < 1 = camera moves IN  (zoom in)  — orbScene convention
+   * factor > 1 = camera moves OUT (zoom out)
    */
   _handleSpread(spread) {
     if (spread > SPREAD_ZOOM_IN) {
-      // Fingers wide → zoom in (move camera closer)
-      // factor < 1 = zoom in in orbScene (camera moves in)
-      const intensity = Math.min((spread - SPREAD_ZOOM_IN) / 0.5, 1.0);
-      const factor = 1.0 - ZOOM_SPEED * intensity;
-      this.callbacks.onZoom(Math.max(0.90, factor));
+      // Fingers wide → zoom IN (factor < 1 moves camera closer)
+      const intensity = Math.min((spread - SPREAD_ZOOM_IN) / 0.4, 1.0);
+      const factor = 1.0 - ZOOM_SPEED * intensity;  // e.g. 0.975
+      this.callbacks.onZoom(Math.max(0.88, factor));
       return "zoom";
     } else if (spread < SPREAD_ZOOM_OUT) {
-      // Fingers closed → zoom out (move camera further)
-      // factor > 1 = zoom out in orbScene
-      const intensity = Math.min((SPREAD_ZOOM_OUT - spread) / 0.4, 1.0);
-      const factor = 1.0 + ZOOM_SPEED * intensity;
-      this.callbacks.onZoom(Math.min(1.10, factor));
+      // Fingers closed → zoom OUT (factor > 1 moves camera further)
+      const intensity = Math.min((SPREAD_ZOOM_OUT - spread) / 0.3, 1.0);
+      const factor = 1.0 + ZOOM_SPEED * intensity;  // e.g. 1.025
+      this.callbacks.onZoom(Math.min(1.12, factor));
       return "zoom";
     }
     return "idle";
