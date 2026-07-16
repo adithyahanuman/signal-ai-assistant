@@ -16,8 +16,16 @@ const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmark
 const WRIST      = 0;
 const THUMB_TIP  = 4;
 const INDEX_TIP  = 8;
+const MIDDLE_TIP = 12;
+const RING_TIP   = 16;
+const PINKY_TIP  = 20;
 const MIDDLE_MCP = 9;
 const PALM_IDS   = [0, 5, 9, 13, 17];
+
+// ── Fist detection ────────────────────────────────────────────────────────────
+// Avg distance of all 4 fingertips from palm center / hand scale.
+// Open hand ≈ 1.2–1.6 — Closed fist ≈ 0.5–0.85
+const FIST_THRESHOLD = 0.90;  // below this = fist closed = rotation allowed
 
 // ── Zoom (delta-based) ────────────────────────────────────────────────────────
 const PINCH_SMOOTH   = 0.30;   // EMA on pinch distance (lower = smoother, less jitter)
@@ -46,6 +54,21 @@ function dist2d(a, b) {
 function rawPinch(lm) {
   const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
   return scale < 1e-6 ? 0.4 : dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / scale;
+}
+
+// Fist ratio: avg fingertip distance from palm / hand scale
+// Low value = fingers curled = fist closed
+function fistRatio(lm) {
+  const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
+  if (scale < 1e-6) return 1.0;
+  // Palm centroid in raw coords
+  let px = 0, py = 0;
+  for (const id of PALM_IDS) { px += lm[id].x; py += lm[id].y; }
+  px /= PALM_IDS.length; py /= PALM_IDS.length;
+  const tips = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP];
+  let total = 0;
+  for (const t of tips) total += dist2d(lm[t], { x: px, y: py });
+  return (total / tips.length) / scale;
 }
 
 
@@ -167,16 +190,15 @@ export class HandTracker {
       }
     }
 
-    // ── 4. ROTATE from palm motion ───────────────────────────────────────────
-    // Independent of zoom — works at the same time.
-    if (this.prevPalm) {
+    // ── 4. ROTATE from palm motion — only when fist is closed ─────────────────
+    const fr = fistRatio(lm);
+    const isFist = fr < FIST_THRESHOLD;
+
+    if (isFist && this.prevPalm) {
       let dx = this.palm.x - this.prevPalm.x;
       let dy = this.palm.y - this.prevPalm.y;
-
-      // Clamp jump artifacts (dropped detection frames)
       dx = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dx));
       dy = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dy));
-
       if (Math.abs(dx) > ROTATE_DEAD || Math.abs(dy) > ROTATE_DEAD) {
         this.callbacks.onRotate(dx * ROTATE_SCALE, dy * ROTATE_SCALE);
         if (mode === "idle") mode = "spin";
@@ -205,16 +227,20 @@ export class HandTracker {
     const ix = (1 - lm[INDEX_TIP].x) * width,   iy = lm[INDEX_TIP].y * height;
 
     // Color based on mode
-    const m = this.lastStatus.mode;
+    const fr     = fistRatio(lm);
+    const isFist = fr < FIST_THRESHOLD;
+    const m      = this.lastStatus.mode;
+
     const color = m === "zoom-in"  ? "#66ffcc"
                 : m === "zoom-out" ? "#ffaa44"
                 : m === "spin"     ? "#7fe8ff"
-                :                    "rgba(127,232,255,0.4)";
+                : isFist           ? "rgba(127,232,255,0.6)"
+                :                    "rgba(127,232,255,0.3)";
     const active = m !== "idle";
 
     // Thumb ↔ index line
     ctx.strokeStyle = color;
-    ctx.lineWidth   = active ? 2.5 : 1.5;
+    ctx.lineWidth   = active ? 2.5 : 1.2;
     ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(ix, iy); ctx.stroke();
 
     // Thumb dot
@@ -225,12 +251,22 @@ export class HandTracker {
     ctx.beginPath(); ctx.arc(ix, iy, active ? 7 : 4, 0, Math.PI * 2);
     ctx.fillStyle = color; ctx.fill();
 
-    // Palm centroid dot
+    // Palm centroid — glows bright when fist closed (rotation ready)
     if (this.palm) {
+      const palmColor = isFist ? "#7fe8ff" : "rgba(77,184,255,0.25)";
+      const palmSize  = isFist ? 7 : 4;
       ctx.beginPath();
-      ctx.arc(this.palm.x * width, this.palm.y * height, 5, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(77,184,255,0.5)";
+      ctx.arc(this.palm.x * width, this.palm.y * height, palmSize, 0, Math.PI * 2);
+      ctx.fillStyle = palmColor;
       ctx.fill();
+      // Ring around palm when fist active
+      if (isFist) {
+        ctx.beginPath();
+        ctx.arc(this.palm.x * width, this.palm.y * height, 12, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(127,232,255,0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
     }
   }
 }
