@@ -1,14 +1,14 @@
 // handTracker.js — SIGNAL gesture engine v5
 //
-// ZOOM IN:  Hold fingers OPEN/WIDE  → continuously zooms in while held
-// ZOOM OUT: Hold fingers PINCHED/CLOSED → continuously zooms out while held
-// NEUTRAL:  Relaxed hand in middle zone → no zoom, allows rotation
-// ROTATE:   Move hand (palm centroid) while in neutral zone → rotates orb
+// ZOOM IN:  Pinch fingers CLOSED/TOGETHER → continuously zooms in while held
+// ZOOM OUT: Hold fingers OPEN/WIDE        → continuously zooms out while held
+// NEUTRAL:  Relaxed hand in middle zone   → no zoom, rotation allowed
+// ROTATE:   Close fist + move hand        → rotates orb
 //
 // Pinch ratio = thumb↔index distance / hand scale
-//   Fully open  ≈ 0.7–1.2  → ZOOM IN zone
-//   Neutral     ≈ 0.35–0.7 → dead zone (rotation allowed)
-//   Pinched     ≈ 0–0.30   → ZOOM OUT zone
+//   Pinched     ≈ 0–0.28  → ZOOM IN  zone
+//   Neutral     ≈ 0.28–0.65 → dead zone (rotation / fist move)
+//   Open wide   ≈ 0.65+  → ZOOM OUT zone
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
@@ -25,12 +25,11 @@ const ZOOM_IN_THRESHOLD  = 0.65;  // ratio ABOVE this → zoom in  (fingers wide
 const ZOOM_OUT_THRESHOLD = 0.28;  // ratio BELOW this → zoom out (fingers pinched)
 
 // ── Zoom speed ────────────────────────────────────────────────────────────────
-// Applied every ZOOM_INTERVAL frames while gesture is held.
 // factor < 1 = camera closer = orb bigger  (zoom in)
 // factor > 1 = camera further = orb smaller (zoom out)
-const ZOOM_IN_FACTOR    = 0.93;  // zoom in step per interval  (7% closer)
-const ZOOM_OUT_FACTOR   = 1.07;  // zoom out step per interval (7% further)
-const ZOOM_INTERVAL     = 3;     // fire zoom every N frames while held (lower = faster)
+const ZOOM_IN_FACTOR    = 0.88;  // zoom in step  (12% closer per interval)
+const ZOOM_OUT_FACTOR   = 1.12;  // zoom out step (12% further per interval)
+const ZOOM_INTERVAL     = 1;     // fire every frame while held (instant response)
 
 // ── Rotation ─────────────────────────────────────────────────────────────────
 const ROTATE_SPEED = 1.6;
@@ -162,15 +161,15 @@ export class HandTracker {
     // ── Determine gesture zone ────────────────────────────────────────────────
     let mode = "idle";
 
-    if (this.smoothPinch >= ZOOM_IN_THRESHOLD) {
-      // ── ZOOM IN: fingers wide/open ─────────────────────────────────────────
+    if (this.smoothPinch <= ZOOM_OUT_THRESHOLD) {
+      // ── ZOOM IN: fingers pinched/closed ───────────────────────────
       mode = "zoom-in";
       if (this.frameCount % ZOOM_INTERVAL === 0) {
         this.callbacks.onZoom(ZOOM_IN_FACTOR);
       }
 
-    } else if (this.smoothPinch <= ZOOM_OUT_THRESHOLD) {
-      // ── ZOOM OUT: fingers pinched/closed ───────────────────────────────────
+    } else if (this.smoothPinch >= ZOOM_IN_THRESHOLD) {
+      // ── ZOOM OUT: fingers wide/open ───────────────────────────────
       mode = "zoom-out";
       if (this.frameCount % ZOOM_INTERVAL === 0) {
         this.callbacks.onZoom(ZOOM_OUT_FACTOR);
