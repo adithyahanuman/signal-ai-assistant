@@ -1,58 +1,50 @@
-// handTracker.js — SIGNAL gesture engine v2
-// Single hand: spread fingers wide = zoom in, close fingers = zoom out.
-//              Pinch (thumb+index together) + move hand = rotate the orb.
-// Two hands:   Both detected simultaneously — handled as independent gesture inputs.
-//              Either hand can rotate (pinch+move) or spread-zoom independently.
-//              If both are pinched and moving, average their motion for rotation.
+// handTracker.js — SIGNAL gesture engine v3
 //
-// Tuning vs v1:
-//  - ROTATE_SPEED lowered from 5.5 → 1.8  (much slower, more controlled spin)
-//  - SMOOTHING raised to 0.55              (more lag = smoother, less twitchy)
-//  - DEAD_ZONE raised to 0.006             (absorbs more jitter before acting)
-//  - MAX_DELTA lowered to 0.018            (tighter jump clamp)
-//  - Zoom from finger spread (one hand), not two-hand pinch distance
-//  - Two-hand support: each hand contributes independently
+// Gesture map (single hand, first hand wins if two visible):
+//
+//   ZOOM:   Track thumb ↔ index distance over time.
+//           Fingers opening apart  → zoom IN  (orb gets bigger)
+//           Fingers closing together → zoom OUT (orb gets smaller)
+//           (Like pinch-to-zoom on a phone, with one hand)
+//
+//   ROTATE: Move whole hand (palm centroid) while NOT zooming.
+//           Slow, smooth, low sensitivity.
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
-// ── Landmark indices ─────────────────────────────────────────────────────────
-const WRIST       = 0;
-const THUMB_TIP   = 4;
-const INDEX_TIP   = 8;
-const MIDDLE_TIP  = 12;
-const RING_TIP    = 16;
-const PINKY_TIP   = 20;
-const INDEX_MCP   = 5;
-const MIDDLE_MCP  = 9;
-const RING_MCP    = 13;
-const PINKY_MCP   = 17;
+// ── Landmark indices ──────────────────────────────────────────────────────────
+const WRIST      = 0;
+const THUMB_TIP  = 4;
+const INDEX_TIP  = 8;
+const MIDDLE_MCP = 9;
+const PALM_IDS   = [0, 5, 9, 13, 17]; // wrist + all 4 MCPs (stable anchors)
 
-// Palm anchor IDs — stable across all gestures (never move with fingers)
-const PALM_IDS = [0, 5, 9, 13, 17];
+// ── Zoom via pinch-distance delta ─────────────────────────────────────────────
+// We track the normalized thumb↔index distance each frame.
+// If it increases → fingers opening → zoom in.
+// If it decreases → fingers closing → zoom out.
+const ZOOM_DELTA_DEAD  = 0.008;  // min change in ratio per frame to act (kills jitter)
+const ZOOM_SENSITIVITY = 12.0;   // multiplier: higher = faster zoom response
+const ZOOM_MAX_FACTOR  = 0.06;   // max zoom step per frame (clamped)
 
+// ── Rotation via palm motion ──────────────────────────────────────────────────
+const ROTATE_SPEED = 1.6;   // multiplier on palm delta (was 5.5 — now much slower)
+const SMOOTHING    = 0.50;  // EMA alpha on palm centroid (lower = smoother)
+const DEAD_ZONE    = 0.007; // min palm delta to count as intentional motion
+const MAX_DELTA    = 0.020; // single-frame clamp — prevents jump artifacts on lost frames
 
-// ── Pinch detection (thumb ↔ index) ───────────────────────────────────
-const PINCH_ON  = 0.30;  // ratio below this → pinching
-const PINCH_OFF = 0.44;  // ratio above this → released
+// ── Zoom/rotate mode switch ───────────────────────────────────────────────────
+// If the pinch distance is actively changing we're zooming, not rotating.
+// This prevents conflicting commands on the same gesture.
+const ZOOM_LOCK_FRAMES = 4; // frames of no zoom change before rotation re-enables
 
-// Spread thresholds — open hand ≈ 1.2–1.5, closed fist ≈ 0.5–0.7
-const SPREAD_ZOOM_IN  = 1.15;  // fingers fairly open → zoom in
-const SPREAD_ZOOM_OUT = 0.80;  // fingers fairly closed → zoom out
-
-// ── Motion tracking parameters ─────────────────────────────────────────
-const ROTATE_SPEED = 1.8;    // much slower than before (was 5.5)
-const SMOOTHING    = 0.55;   // EMA alpha — lower = smoother but more lag
-const DEAD_ZONE    = 0.006;  // normalized — suppresses micro-jitter
-const MAX_DELTA    = 0.018;  // single-frame clamp — prevents jump artifacts
-const ZOOM_SPEED   = 0.025;  // zoom amount per frame when spreading/closing
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function palmCenter(lm) {
   let x = 0, y = 0;
   for (const id of PALM_IDS) { x += lm[id].x; y += lm[id].y; }
   return {
-    x: 1 - x / PALM_IDS.length, // mirror x
+    x: 1 - x / PALM_IDS.length, // mirror x so right-move = screen-right
     y:     y / PALM_IDS.length,
   };
 }
@@ -61,38 +53,15 @@ function dist2d(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-/**
- * Computes finger spread ratio for a single hand.
- * Returns the average distance of all 4 fingertips from the palm center,
- * normalized by hand scale (wrist→middleMCP).
- * All coordinates kept in raw (un-mirrored) landmark space for consistency.
- */
-function fingerSpreadRatio(lm) {
-  const handScale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
-  if (handScale < 1e-6) return 1.0;
-
-  // Palm centroid in raw (un-mirrored) coords
-  let px = 0, py = 0;
-  for (const id of PALM_IDS) { px += lm[id].x; py += lm[id].y; }
-  px /= PALM_IDS.length;
-  py /= PALM_IDS.length;
-  const palmRaw = { x: px, y: py };
-
-  const tips = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP];
-  let totalDist = 0;
-  for (const tip of tips) {
-    totalDist += dist2d(lm[tip], palmRaw);
-  }
-  return (totalDist / tips.length) / handScale;
+/** Normalized pinch ratio: thumb↔index distance / hand scale (wrist→middleMCP). */
+function pinchRatio(lm) {
+  const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
+  if (scale < 1e-6) return 0.5;
+  return dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / scale;
 }
 
 
 export class HandTracker {
-  /**
-   * @param {HTMLVideoElement} video
-   * @param {HTMLCanvasElement} overlay
-   * @param {{ onRotate: Function, onZoom: Function, onStatus: Function }} callbacks
-   */
   constructor(video, overlay, callbacks) {
     this.video     = video;
     this.overlay   = overlay;
@@ -104,9 +73,11 @@ export class HandTracker {
     this.running       = false;
     this.lastVideoTime = -1;
 
-    // Per-hand state keyed by label ("Left" / "Right")
-    this.handStates = new Map();
-    this.lastStatus = { hands: 0, mode: "idle" };
+    // Per-hand persistent state
+    this.grab          = null;   // smoothed palm centroid
+    this.prevPinch     = null;   // previous frame's pinch ratio
+    this.zoomLock      = 0;      // countdown: frames until rotation re-enables
+    this.lastStatus    = { hands: 0, mode: "idle" };
   }
 
   async start() {
@@ -147,7 +118,9 @@ export class HandTracker {
     if (this.landmarker) { this.landmarker.close(); this.landmarker = null; }
     if (this.stream)     { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
     this.video.srcObject = null;
-    this.handStates.clear();
+    this.grab = null;
+    this.prevPinch = null;
+    this.zoomLock = 0;
     const ctx = this.overlay.getContext("2d");
     if (ctx) ctx.clearRect(0, 0, this.overlay.width, this.overlay.height);
     this._emitStatus({ hands: 0, mode: "idle" });
@@ -161,129 +134,80 @@ export class HandTracker {
     this.lastVideoTime = this.video.currentTime;
 
     const result = this.landmarker.detectForVideo(this.video, performance.now());
-    this._processHands(
-      result.landmarks,
-      result.handedness.map(h => h[0]?.categoryName ?? "?"),
-    );
-    this._drawOverlay(result.landmarks, result.handedness.map(h => h[0]?.categoryName ?? "?"));
+    this._processHands(result.landmarks);
+    this._drawOverlay(result.landmarks);
   }
 
-  _processHands(landmarks, labels) {
-    const seen = new Set();
-
-    // ── Per-hand processing ───────────────────────────────────────────────────
-    const handData = []; // { label, pinching, grab, spread }
-
-    landmarks.forEach((lm, i) => {
-      const label = labels[i];
-      seen.add(label);
-
-      const handScale  = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
-      if (handScale < 1e-6) return;
-
-      const pinchRatio = dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / handScale;
-      const spread     = fingerSpreadRatio(lm);
-      const raw        = palmCenter(lm);
-
-      let state = this.handStates.get(label);
-      if (!state) {
-        state = { pinching: false, grab: raw, prevGrab: null };
-        this.handStates.set(label, state);
-      }
-
-      // Pinch hysteresis
-      if ( state.pinching && pinchRatio > PINCH_OFF) state.pinching = false;
-      if (!state.pinching && pinchRatio < PINCH_ON)  state.pinching = true;
-
-      // EMA smoothing on palm centroid
-      state.grab = {
-        x: state.grab.x + (raw.x - state.grab.x) * SMOOTHING,
-        y: state.grab.y + (raw.y - state.grab.y) * SMOOTHING,
-      };
-
-      handData.push({ label, pinching: state.pinching, grab: state.grab, spread, state });
-    });
-
-    // Drop state for hands that left frame
-    for (const key of this.handStates.keys()) {
-      if (!seen.has(key)) this.handStates.delete(key);
+  _processHands(landmarks) {
+    if (landmarks.length === 0) {
+      // No hand — reset state
+      this.grab      = null;
+      this.prevPinch = null;
+      this.zoomLock  = 0;
+      this._emitStatus({ hands: 0, mode: "idle" });
+      return;
     }
 
-    // ── Always use only the first detected hand, ignore any second hand ────────
-    const numHands = handData.length;
-    const h        = handData[0]; // primary hand only
+    // Always use only the FIRST detected hand
+    const lm = landmarks[0];
 
+    // ── 1. Compute this frame's pinch ratio ────────────────────────────────────
+    const pr  = pinchRatio(lm);
+    const raw = palmCenter(lm);
+
+    // ── 2. Smooth palm centroid (EMA) ─────────────────────────────────────────
+    if (!this.grab) {
+      this.grab = { x: raw.x, y: raw.y };
+    } else {
+      this.grab.x += (raw.x - this.grab.x) * SMOOTHING;
+      this.grab.y += (raw.y - this.grab.y) * SMOOTHING;
+    }
+
+    // ── 3. Zoom from pinch-distance delta ────────────────────────────────────
+    // delta > 0 → fingers moved apart  → zoom IN  (factor < 1)
+    // delta < 0 → fingers moved closer → zoom OUT (factor > 1)
     let mode = "idle";
 
-    if (!h) {
-      mode = "idle";
-    } else if (h.pinching) {
-      // Pinch + move → ROTATE
-      mode = "spin";
-      this._handleSpin([h]);
-    } else {
-      // Open hand: spread ratio controls zoom
-      mode = this._handleSpread(h.spread);
+    if (this.prevPinch !== null) {
+      const delta = pr - this.prevPinch; // positive = opened, negative = closed
+
+      if (Math.abs(delta) > ZOOM_DELTA_DEAD) {
+        // Clamp step size
+        const step   = Math.min(Math.abs(delta) * ZOOM_SENSITIVITY, ZOOM_MAX_FACTOR);
+        // delta > 0 (opening) → zoom in → factor < 1
+        // delta < 0 (closing) → zoom out → factor > 1
+        const factor = delta > 0
+          ? Math.max(1 - step, 0.88)   // zoom in: shrink distance to target
+          : Math.min(1 + step, 1.12);  // zoom out: grow distance to target
+
+        this.callbacks.onZoom(factor);
+        this.zoomLock = ZOOM_LOCK_FRAMES;
+        mode = "zoom";
+      }
     }
+    this.prevPinch = pr;
 
-    this._emitStatus({ hands: numHands, mode });
-  }
+    // ── 4. Rotate from palm motion (only when not actively zooming) ───────────
+    if (mode !== "zoom" && this.zoomLock <= 0) {
+      // Compare smoothed grab to stored previous grab position
+      if (this._prevGrab) {
+        let dx = this.grab.x - this._prevGrab.x;
+        let dy = this.grab.y - this._prevGrab.y;
 
-  /**
-   * Spin the orb using the given set of pinched hands.
-   * If multiple hands, uses their averaged position.
-   */
-  _handleSpin(pinched) {
-    // Average grab position across all pinched hands
-    let ax = 0, ay = 0;
-    for (const h of pinched) { ax += h.grab.x; ay += h.grab.y; }
-    ax /= pinched.length;
-    ay /= pinched.length;
+        dx = Math.max(-MAX_DELTA, Math.min(MAX_DELTA, dx));
+        dy = Math.max(-MAX_DELTA, Math.min(MAX_DELTA, dy));
 
-    // Use first hand's state for prevGrab tracking
-    const state = pinched[0].state;
-
-    if (state.prevGrab) {
-      let dx = ax - state.prevGrab.x;
-      let dy = ay - state.prevGrab.y;
-
-      // Clamp jump artifacts
-      dx = Math.max(-MAX_DELTA, Math.min(MAX_DELTA, dx));
-      dy = Math.max(-MAX_DELTA, Math.min(MAX_DELTA, dy));
-
-      if (Math.abs(dx) > DEAD_ZONE || Math.abs(dy) > DEAD_ZONE) {
-        this.callbacks.onRotate(dx * ROTATE_SPEED, dy * ROTATE_SPEED);
+        if (Math.abs(dx) > DEAD_ZONE || Math.abs(dy) > DEAD_ZONE) {
+          this.callbacks.onRotate(dx * ROTATE_SPEED, dy * ROTATE_SPEED);
+          mode = "spin";
+        }
       }
     }
 
-    state.prevGrab = { x: ax, y: ay };
+    if (this.zoomLock > 0) this.zoomLock--;
+    this._prevGrab = { x: this.grab.x, y: this.grab.y };
 
-    // Reset prevGrab on non-pinched hands to avoid jump when they pinch later
-    this.handStates.forEach((s, key) => {
-      if (!pinched.find(h => h.label === key)) s.prevGrab = null;
-    });
-  }
-
-  /**
-   * Handle spread/close zoom for a single hand's spread ratio.
-   * factor < 1 = camera moves IN  (zoom in)  — orbScene convention
-   * factor > 1 = camera moves OUT (zoom out)
-   */
-  _handleSpread(spread) {
-    if (spread > SPREAD_ZOOM_IN) {
-      // Fingers wide → zoom IN (factor < 1 moves camera closer)
-      const intensity = Math.min((spread - SPREAD_ZOOM_IN) / 0.4, 1.0);
-      const factor = 1.0 - ZOOM_SPEED * intensity;  // e.g. 0.975
-      this.callbacks.onZoom(Math.max(0.88, factor));
-      return "zoom";
-    } else if (spread < SPREAD_ZOOM_OUT) {
-      // Fingers closed → zoom OUT (factor > 1 moves camera further)
-      const intensity = Math.min((SPREAD_ZOOM_OUT - spread) / 0.3, 1.0);
-      const factor = 1.0 + ZOOM_SPEED * intensity;  // e.g. 1.025
-      this.callbacks.onZoom(Math.min(1.12, factor));
-      return "zoom";
-    }
-    return "idle";
+    this._emitStatus({ hands: landmarks.length, mode });
   }
 
   _emitStatus(status) {
@@ -293,82 +217,54 @@ export class HandTracker {
     }
   }
 
-  _drawOverlay(landmarks, labels) {
+  _drawOverlay(landmarks) {
     const ctx = this.overlay.getContext("2d");
     if (!ctx) return;
     const { width, height } = this.overlay;
     ctx.clearRect(0, 0, width, height);
 
-    landmarks.forEach((lm, i) => {
-      const handScale  = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
-      if (handScale < 1e-6) return;
+    if (landmarks.length === 0) return;
 
-      const pinchRatio = dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / handScale;
-      const state      = this.handStates.get(labels[i]);
-      const pinched    = state?.pinching ?? (pinchRatio < PINCH_ON);
-      const spread     = fingerSpreadRatio(lm);
-      const zooming    = !pinched && (spread > SPREAD_ZOOM_IN || spread < SPREAD_ZOOM_OUT);
+    // Draw first hand only
+    const lm = landmarks[0];
+    const pr = pinchRatio(lm);
 
-      // ── Draw all fingertip dots ─────────────────────────────────────────────
-      const tips = [THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP];
-      tips.forEach(tip => {
-        const x = (1 - lm[tip].x) * width;
-        const y = lm[tip].y * height;
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = pinched
-          ? "#b8f0ff"
-          : zooming
-            ? "#7fe8ff"
-            : "rgba(127,232,255,0.5)";
-        ctx.fill();
-      });
+    const tx = (1 - lm[THUMB_TIP].x) * width,  ty = lm[THUMB_TIP].y * height;
+    const ix = (1 - lm[INDEX_TIP].x) * width,   iy = lm[INDEX_TIP].y * height;
 
-      // ── Draw pinch line (thumb ↔ index) ─────────────────────────────────────
-      const tx = (1 - lm[THUMB_TIP].x) * width,  ty = lm[THUMB_TIP].y * height;
-      const ix = (1 - lm[INDEX_TIP].x) * width,   iy = lm[INDEX_TIP].y * height;
-      ctx.strokeStyle = pinched ? "#b8f0ff" : "rgba(127,232,255,0.3)";
-      ctx.lineWidth   = pinched ? 2 : 1;
+    // Color: cyan-green when opening (zoom in), amber when closing (zoom out), cyan default
+    const delta = this.prevPinch !== null ? pr - this.prevPinch : 0;
+    const isZooming = Math.abs(delta) > ZOOM_DELTA_DEAD;
+    const lineColor = isZooming
+      ? (delta > 0 ? "#66ffcc" : "#ffaa44")  // green=in, amber=out
+      : "rgba(127,232,255,0.6)";
+
+    // Line between thumb and index
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth   = isZooming ? 2.5 : 1.5;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(ix, iy);
+    ctx.stroke();
+
+    // Thumb dot
+    ctx.beginPath();
+    ctx.arc(tx, ty, isZooming ? 6 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = lineColor;
+    ctx.fill();
+
+    // Index dot
+    ctx.beginPath();
+    ctx.arc(ix, iy, isZooming ? 6 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = lineColor;
+    ctx.fill();
+
+    // Palm centroid (rotation anchor)
+    if (this.grab) {
       ctx.beginPath();
-      ctx.moveTo(tx, ty);
-      ctx.lineTo(ix, iy);
-      ctx.stroke();
-
-      // ── Draw spread fan lines (fingertip → palm center) when zooming ─────────
-      if (zooming) {
-        const pc  = palmCenter(lm);
-        const pcx = pc.x * width;
-        const pcy = pc.y * height;
-        const fanColor = spread > SPREAD_ZOOM_IN
-          ? "rgba(77,232,200,0.35)"   // cyan-green = zoom in
-          : "rgba(255,180,100,0.35)"; // amber = zoom out
-        ctx.strokeStyle = fanColor;
-        ctx.lineWidth   = 1;
-        [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP].forEach(tip => {
-          const fx = (1 - lm[tip].x) * width;
-          const fy = lm[tip].y * height;
-          ctx.beginPath();
-          ctx.moveTo(pcx, pcy);
-          ctx.lineTo(fx, fy);
-          ctx.stroke();
-        });
-        // Pulse circle at palm center
-        ctx.beginPath();
-        ctx.arc(pcx, pcy, 5, 0, Math.PI * 2);
-        ctx.fillStyle = fanColor;
-        ctx.fill();
-      }
-
-      // ── Palm centroid dot (tracking anchor) ──────────────────────────────────
-      const pc  = palmCenter(lm);
-      const pcx = pc.x * width;
-      const pcy = pc.y * height;
-      ctx.beginPath();
-      ctx.arc(pcx, pcy, pinched ? 5 : 3, 0, Math.PI * 2);
-      ctx.fillStyle = pinched
-        ? "rgba(127,232,255,0.9)"
-        : "rgba(77,184,255,0.4)";
+      ctx.arc(this.grab.x * width, this.grab.y * height, 4, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(77,184,255,0.5)";
       ctx.fill();
-    });
+    }
   }
 }
