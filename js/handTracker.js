@@ -20,25 +20,31 @@ const INDEX_TIP  = 8;
 const MIDDLE_MCP = 9;
 const PALM_IDS   = [0, 5, 9, 13, 17];
 
-// ── Zoom thresholds (tune these if hand size varies) ─────────────────────────
-const ZOOM_IN_THRESHOLD  = 0.65;  // ratio ABOVE this → zoom in  (fingers wide)
-const ZOOM_OUT_THRESHOLD = 0.28;  // ratio BELOW this → zoom out (fingers pinched)
+// ── Zoom thresholds ────────────────────────────────────────────────
+// Pinch ratio for a relaxed/neutral hand is roughly 0.35-0.55.
+// These thresholds must be clearly outside that range.
+const ZOOM_IN_THRESHOLD  = 0.82;  // ratio ABOVE this → zoom out (fingers very wide)
+const ZOOM_OUT_THRESHOLD = 0.14;  // ratio BELOW this → zoom in  (very deliberate pinch)
 
-// ── Zoom speed ────────────────────────────────────────────────────────────────
+// Must stay in the zone for this many frames before zoom activates
+// Prevents accidental/transient triggers when just showing the hand
+const ZONE_ENTRY_FRAMES = 10;
+
+// ── Zoom speed ────────────────────────────────────────────────
 // factor < 1 = camera closer = orb bigger  (zoom in)
 // factor > 1 = camera further = orb smaller (zoom out)
-const ZOOM_IN_FACTOR    = 0.88;  // zoom in step  (12% closer per interval)
-const ZOOM_OUT_FACTOR   = 1.12;  // zoom out step (12% further per interval)
-const ZOOM_INTERVAL     = 1;     // fire every frame while held (instant response)
+const ZOOM_IN_FACTOR  = 0.92;  // zoom in step  (8% closer per interval)
+const ZOOM_OUT_FACTOR = 1.08;  // zoom out step (8% further per interval)
+const ZOOM_INTERVAL   = 3;     // fire every N frames while in zone
 
-// ── Rotation ─────────────────────────────────────────────────────────────────
+// ── Rotation ────────────────────────────────────────────────
 const ROTATE_SPEED = 1.6;
 const SMOOTHING    = 0.50;
 const DEAD_ZONE    = 0.007;
 const MAX_DELTA    = 0.020;
 
-// ── Smoothing for pinch ratio (prevents jitter flipping zones) ────────────────
-const PINCH_SMOOTHING = 0.35;   // heavy smoothing on ratio (lower = smoother)
+// Heavy smoothing on pinch ratio — kills jitter at zone boundaries
+const PINCH_SMOOTHING = 0.20;  // lower = slower to cross threshold = fewer false triggers
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function palmCenter(lm) {
@@ -75,10 +81,12 @@ export class HandTracker {
   }
 
   _resetState() {
-    this.grab         = null;
-    this._prevGrab    = null;
-    this.smoothPinch  = 0.5;   // smoothed pinch ratio, starts neutral
-    this.frameCount   = 0;
+    this.grab        = null;
+    this._prevGrab   = null;
+    this.smoothPinch = 0.45;  // start in neutral zone
+    this.frameCount  = 0;
+    this.zoneFrames  = 0;     // consecutive frames spent in current zoom zone
+    this.activeZone  = null;  // 'in', 'out', or null
   }
 
   async start() {
@@ -163,20 +171,28 @@ export class HandTracker {
 
     if (this.smoothPinch <= ZOOM_OUT_THRESHOLD) {
       // ── ZOOM IN: fingers pinched/closed ───────────────────────────
+      if (this.activeZone !== "in") { this.activeZone = "in"; this.zoneFrames = 0; }
+      this.zoneFrames++;
       mode = "zoom-in";
-      if (this.frameCount % ZOOM_INTERVAL === 0) {
+      // Only fire after holding the gesture for ZONE_ENTRY_FRAMES frames
+      if (this.zoneFrames >= ZONE_ENTRY_FRAMES && this.frameCount % ZOOM_INTERVAL === 0) {
         this.callbacks.onZoom(ZOOM_IN_FACTOR);
       }
 
     } else if (this.smoothPinch >= ZOOM_IN_THRESHOLD) {
       // ── ZOOM OUT: fingers wide/open ───────────────────────────────
+      if (this.activeZone !== "out") { this.activeZone = "out"; this.zoneFrames = 0; }
+      this.zoneFrames++;
       mode = "zoom-out";
-      if (this.frameCount % ZOOM_INTERVAL === 0) {
+      // Only fire after holding the gesture for ZONE_ENTRY_FRAMES frames
+      if (this.zoneFrames >= ZONE_ENTRY_FRAMES && this.frameCount % ZOOM_INTERVAL === 0) {
         this.callbacks.onZoom(ZOOM_OUT_FACTOR);
       }
 
     } else {
-      // ── NEUTRAL zone: rotation allowed ────────────────────────────────────
+      // ── NEUTRAL zone: reset zone state, allow rotation ────────────
+      this.activeZone = null;
+      this.zoneFrames = 0;
       mode = "idle";
       if (this._prevGrab) {
         let dx = this.grab.x - this._prevGrab.x;
