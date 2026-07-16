@@ -1,76 +1,68 @@
-// handTracker.js — SIGNAL gesture engine v7
+// handTracker.js — SIGNAL gesture engine v8
 //
-// Uses ALL 5 fingertips for accurate hand-openness tracking.
+// Tracks all 5 fingers individually using tip-vs-MCP wrist-distance comparison.
 //
-// SPREAD RATIO = avg distance of all 5 fingertips from palm center / hand scale
-//   Open hand  ≈ 1.2–1.6
-//   Relaxed    ≈ 0.9–1.2
-//   Fist       ≈ 0.4–0.8
+// GESTURE MAP:
+//   ✊ (all 5 closed / fist)             + move hand  → ROTATE
+//   🤟 (middle+ring+pinky closed,          
+//       thumb+index spread/moving apart) → ZOOM IN
+//   🤟 (middle+ring+pinky closed,
+//       thumb+index moving together)     → ZOOM OUT
+//   🖐️ (all 5 open, any state)           → IDLE (nothing)
 //
-// ZOOM:   Delta of spread ratio per frame.
-//         Fingers spreading apart  → zoom in
-//         Fingers closing together → zoom out
-//         Hand held still         → nothing (no drift)
-//
-// ROTATE: When spread ratio is LOW (fist closed) + hand moves → rotate orb.
+// Finger-open detection: tip is farther from wrist than its MCP × 1.1 → extended.
 
 const WASM_CDN  = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
 // ── Landmark indices ──────────────────────────────────────────────────────────
 const WRIST      = 0;
-const THUMB_TIP  = 4;
-const INDEX_TIP  = 8;
-const MIDDLE_TIP = 12;
-const RING_TIP   = 16;
-const PINKY_TIP  = 20;
-const MIDDLE_MCP = 9;
-const PALM_IDS   = [0, 5, 9, 13, 17]; // wrist + all 4 MCPs (stable anchors)
-const ALL_TIPS   = [THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP];
+const THUMB_TIP  = 4;  const THUMB_MCP  = 2;
+const INDEX_TIP  = 8;  const INDEX_MCP  = 5;
+const MIDDLE_TIP = 12; const MIDDLE_MCP = 9;
+const RING_TIP   = 16; const RING_MCP   = 13;
+const PINKY_TIP  = 20; const PINKY_MCP  = 17;
+const PALM_IDS   = [0, 5, 9, 13, 17];
 
-// ── Fist threshold ────────────────────────────────────────────────────────────
-// Spread ratio below this = fist closed = rotation allowed
-const FIST_THRESHOLD = 0.88;
-
-// ── Zoom (spread-delta based) ─────────────────────────────────────────────────
-const SPREAD_SMOOTH  = 0.28;   // EMA on spread ratio (lower = smoother)
-const ZOOM_DEAD      = 0.005;  // min spread delta per frame to count as intentional
-const ZOOM_SCALE     = 16.0;   // delta → zoom factor multiplier
-const ZOOM_MAX_STEP  = 0.10;   // max zoom change per frame
-
-// ── Rotation ──────────────────────────────────────────────────────────────────
-const PALM_SMOOTH    = 0.40;
-const ROTATE_DEAD    = 0.005;
-const ROTATE_SCALE   = 2.2;
-const ROTATE_MAX     = 0.025;
+// ── Tuning ────────────────────────────────────────────────────────────────────
+const OPEN_RATIO    = 1.08;  // tip/mcp wrist-distance ratio to count as "open"
+const PINCH_SMOOTH  = 0.30;  // EMA on thumb-index distance
+const PALM_SMOOTH   = 0.40;  // EMA on palm centroid
+const ZOOM_DEAD     = 0.006; // min delta to count as intentional zoom motion
+const ZOOM_SCALE    = 18.0;  // delta → zoom factor
+const ZOOM_MAX      = 0.10;  // max zoom step per frame
+const ROTATE_DEAD   = 0.005; // min palm delta for rotation
+const ROTATE_SCALE  = 2.5;
+const ROTATE_MAX    = 0.025;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function palmCenterRaw(lm) {
+function dist2d(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** Returns true if the finger is extended (open). */
+function fingerOpen(lm, tipId, mcpId) {
+  return dist2d(lm[tipId], lm[WRIST]) > dist2d(lm[mcpId], lm[WRIST]) * OPEN_RATIO;
+}
+
+/** Mirrored palm centroid for display. */
+function palmMirrored(lm) {
+  let x = 0, y = 0;
+  for (const id of PALM_IDS) { x += lm[id].x; y += lm[id].y; }
+  return { x: 1 - x / PALM_IDS.length, y: y / PALM_IDS.length };
+}
+
+/** Raw (un-mirrored) palm centroid for distance calculations. */
+function palmRaw(lm) {
   let x = 0, y = 0;
   for (const id of PALM_IDS) { x += lm[id].x; y += lm[id].y; }
   return { x: x / PALM_IDS.length, y: y / PALM_IDS.length };
 }
 
-function palmCenterMirrored(lm) {
-  const p = palmCenterRaw(lm);
-  return { x: 1 - p.x, y: p.y };
-}
-
-function dist2d(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-/**
- * Spread ratio: avg distance of ALL 5 fingertips from palm center / hand scale.
- * Single number representing how open the hand is.
- */
-function spreadRatio(lm) {
+/** Normalized thumb↔index distance / hand scale. */
+function pinchDist(lm) {
   const scale = dist2d(lm[WRIST], lm[MIDDLE_MCP]);
-  if (scale < 1e-6) return 1.0;
-  const palm = palmCenterRaw(lm); // raw (un-mirrored) for tip comparison
-  let total = 0;
-  for (const tip of ALL_TIPS) total += dist2d(lm[tip], palm);
-  return (total / ALL_TIPS.length) / scale;
+  return scale < 1e-6 ? 0.5 : dist2d(lm[THUMB_TIP], lm[INDEX_TIP]) / scale;
 }
 
 
@@ -91,9 +83,9 @@ export class HandTracker {
   }
 
   _clear() {
-    this.spread    = null;  // smoothed spread ratio
-    this.palm      = null;  // smoothed palm centroid (mirrored)
-    this.prevPalm  = null;
+    this.pinch    = null;  // smoothed thumb-index distance
+    this.palm     = null;  // smoothed mirrored palm centroid
+    this.prevPalm = null;
   }
 
   async start() {
@@ -157,15 +149,19 @@ export class HandTracker {
 
     const lm = landmarks[0]; // first hand only
 
-    // ── 1. Spread ratio (all 5 tips) ─────────────────────────────────────────
-    const rawSpread = spreadRatio(lm);
-    const prevSpread = this.spread;
-    this.spread = this.spread === null
-      ? rawSpread
-      : this.spread + (rawSpread - this.spread) * SPREAD_SMOOTH;
+    // ── 1. Classify each finger ──────────────────────────────────────────────
+    const thumbUp  = fingerOpen(lm, THUMB_TIP,  THUMB_MCP);
+    const indexUp  = fingerOpen(lm, INDEX_TIP,  INDEX_MCP);
+    const midDown  = !fingerOpen(lm, MIDDLE_TIP, MIDDLE_MCP);
+    const ringDown = !fingerOpen(lm, RING_TIP,   RING_MCP);
+    const pinkyDown= !fingerOpen(lm, PINKY_TIP,  PINKY_MCP);
+
+    const allClosed = !thumbUp && !indexUp && midDown && ringDown && pinkyDown;
+    const allOpen   = thumbUp && indexUp && !midDown && !ringDown && !pinkyDown;
+    const zoomReady = midDown && ringDown && pinkyDown; // 3 down, thumb+index free
 
     // ── 2. Smooth palm centroid ──────────────────────────────────────────────
-    const rawPalm = palmCenterMirrored(lm);
+    const rawPalm = palmMirrored(lm);
     this.prevPalm = this.palm ? { ...this.palm } : null;
     this.palm = this.palm === null
       ? rawPalm
@@ -174,36 +170,45 @@ export class HandTracker {
 
     let mode = "idle";
 
-    // ── 3. ZOOM from spread delta ────────────────────────────────────────────
-    // Fires only when hand is actively opening or closing — not when still.
-    if (prevSpread !== null) {
-      const delta = this.spread - prevSpread; // +ve = opening = zoom in
+    // ── 3. ZOOM — only when 3 fingers are down ───────────────────────────────
+    if (zoomReady && !allClosed) {
+      const pd = pinchDist(lm);
+      const prev = this.pinch;
+      this.pinch = this.pinch === null
+        ? pd
+        : this.pinch + (pd - this.pinch) * PINCH_SMOOTH;
 
-      if (Math.abs(delta) > ZOOM_DEAD) {
-        const step = Math.min(Math.abs(delta) * ZOOM_SCALE, ZOOM_MAX_STEP);
-        // Opening (delta > 0) → zoom in → factor < 1 (camera closer = orb bigger)
-        // Closing (delta < 0) → zoom out → factor > 1
-        const factor = delta > 0
-          ? Math.max(1.0 - step, 0.85)
-          : Math.min(1.0 + step, 1.15);
-        this.callbacks.onZoom(factor);
-        mode = delta > 0 ? "zoom-in" : "zoom-out";
+      if (prev !== null) {
+        const delta = this.pinch - prev; // +ve = thumb/index apart = zoom in
+        if (Math.abs(delta) > ZOOM_DEAD) {
+          const step   = Math.min(Math.abs(delta) * ZOOM_SCALE, ZOOM_MAX);
+          // Apart (delta>0) → zoom IN  → factor < 1 (camera closer = orb bigger)
+          // Together (delta<0) → zoom OUT → factor > 1
+          const factor = delta > 0
+            ? Math.max(1.0 - step, 0.85)
+            : Math.min(1.0 + step, 1.15);
+          this.callbacks.onZoom(factor);
+          mode = delta > 0 ? "zoom-in" : "zoom-out";
+        }
       }
+    } else {
+      this.pinch = null; // reset when gesture changes
     }
 
-    // ── 4. ROTATE — only when fist is closed (spread ratio low) ─────────────
-    const isFist = this.spread < FIST_THRESHOLD;
-
-    if (isFist && this.prevPalm) {
+    // ── 4. ROTATE — only when all 5 fingers closed (fist) ───────────────────
+    if (allClosed && this.prevPalm) {
       let dx = this.palm.x - this.prevPalm.x;
       let dy = this.palm.y - this.prevPalm.y;
       dx = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dx));
       dy = Math.max(-ROTATE_MAX, Math.min(ROTATE_MAX, dy));
       if (Math.abs(dx) > ROTATE_DEAD || Math.abs(dy) > ROTATE_DEAD) {
         this.callbacks.onRotate(dx * ROTATE_SCALE, dy * ROTATE_SCALE);
-        if (mode === "idle") mode = "spin";
+        mode = "spin";
       }
     }
+
+    // ── 5. All open → idle (no action) ──────────────────────────────────────
+    // (allOpen already results in mode = "idle" — nothing to do)
 
     this._emitStatus({ hands: landmarks.length, mode });
   }
@@ -220,72 +225,80 @@ export class HandTracker {
     if (!ctx) return;
     const { width, height } = this.overlay;
     ctx.clearRect(0, 0, width, height);
-    if (!landmarks.length || !this.spread) return;
+    if (!landmarks.length) return;
 
-    const lm     = landmarks[0];
-    const isFist = this.spread < FIST_THRESHOLD;
-    const m      = this.lastStatus.mode;
+    const lm = landmarks[0];
+    const m  = this.lastStatus.mode;
 
-    // Color theme per mode
-    const tipColor = m === "zoom-in"  ? "#66ffcc"
-                   : m === "zoom-out" ? "#ffaa44"
-                   : m === "spin"     ? "#7fe8ff"
-                   : isFist           ? "rgba(127,232,255,0.7)"
-                   :                    "rgba(127,232,255,0.35)";
-    const active = m !== "idle";
+    // Finger open/closed state
+    const states = [
+      { tip: THUMB_TIP,  mcp: THUMB_MCP,  open: fingerOpen(lm, THUMB_TIP,  THUMB_MCP)  },
+      { tip: INDEX_TIP,  mcp: INDEX_MCP,  open: fingerOpen(lm, INDEX_TIP,  INDEX_MCP)  },
+      { tip: MIDDLE_TIP, mcp: MIDDLE_MCP, open: fingerOpen(lm, MIDDLE_TIP, MIDDLE_MCP) },
+      { tip: RING_TIP,   mcp: RING_MCP,   open: fingerOpen(lm, RING_TIP,   RING_MCP)   },
+      { tip: PINKY_TIP,  mcp: PINKY_MCP,  open: fingerOpen(lm, PINKY_TIP,  PINKY_MCP)  },
+    ];
 
-    // Palm center (mirrored for display)
-    const palm = palmCenterMirrored(lm);
+    const allClosed = states.every(s => !s.open);
+    const palm = this.palm ?? palmMirrored(lm);
     const pcx  = palm.x * width;
     const pcy  = palm.y * height;
 
-    // Draw fan lines from palm to each of the 5 fingertips
-    ALL_TIPS.forEach(tip => {
+    states.forEach(({ tip, open }) => {
       const fx = (1 - lm[tip].x) * width;
       const fy = lm[tip].y * height;
 
-      // Line palm → tip
-      ctx.strokeStyle = active ? tipColor : "rgba(127,232,255,0.18)";
-      ctx.lineWidth   = active ? 1.5 : 1;
+      // Color: green = active open finger, dim = closed finger
+      let dotColor;
+      if (m === "zoom-in")       dotColor = open ? "#66ffcc" : "rgba(102,255,204,0.2)";
+      else if (m === "zoom-out") dotColor = open ? "#ffaa44" : "rgba(255,170,68,0.2)";
+      else if (m === "spin")     dotColor = "#7fe8ff";
+      else                       dotColor = open ? "rgba(127,232,255,0.55)" : "rgba(127,232,255,0.18)";
+
+      // Fan line palm → tip
+      ctx.strokeStyle = dotColor;
+      ctx.lineWidth   = (m !== "idle") ? 1.5 : 1;
       ctx.beginPath();
       ctx.moveTo(pcx, pcy);
       ctx.lineTo(fx, fy);
       ctx.stroke();
 
-      // Tip dot
+      // Tip dot — bigger for open fingers when active
+      const dotSize = (m !== "idle" && open) ? 7 : open ? 4 : 3;
       ctx.beginPath();
-      ctx.arc(fx, fy, active ? 6 : 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = tipColor;
+      ctx.arc(fx, fy, dotSize, 0, Math.PI * 2);
+      ctx.fillStyle = dotColor;
       ctx.fill();
     });
 
-    // Palm centroid dot — glows when fist (rotation ready)
-    const palmDotColor = isFist ? "#7fe8ff" : "rgba(77,184,255,0.3)";
+    // Palm centroid
+    const palmColor = allClosed ? "#7fe8ff" : "rgba(77,184,255,0.35)";
     ctx.beginPath();
-    ctx.arc(pcx, pcy, isFist ? 7 : 4, 0, Math.PI * 2);
-    ctx.fillStyle = palmDotColor;
+    ctx.arc(pcx, pcy, allClosed ? 7 : 4, 0, Math.PI * 2);
+    ctx.fillStyle = palmColor;
     ctx.fill();
 
-    // Outer ring when fist detected
-    if (isFist) {
+    // Ring when fist (rotate mode)
+    if (allClosed) {
       ctx.beginPath();
       ctx.arc(pcx, pcy, 14, 0, Math.PI * 2);
-      ctx.strokeStyle = "rgba(127,232,255,0.35)";
+      ctx.strokeStyle = "rgba(127,232,255,0.4)";
       ctx.lineWidth   = 1.5;
       ctx.stroke();
     }
 
-    // Spread ratio bar at bottom
-    const barW = width * 0.7;
-    const barX = (width - barW) / 2;
-    const barY = height - 12;
-    ctx.fillStyle = "rgba(127,232,255,0.10)";
-    ctx.fillRect(barX, barY, barW, 4);
-    const fill = Math.min(this.spread / 1.6, 1.0) * barW;
-    ctx.fillStyle = tipColor;
-    ctx.fillRect(barX, barY, fill, 4);
-    // Fist threshold marker
-    ctx.fillStyle = "rgba(255,255,255,0.4)";
-    ctx.fillRect(barX + (FIST_THRESHOLD / 1.6) * barW, barY - 1, 2, 6);
+    // Status label
+    const label = m === "zoom-in"  ? "ZOOM IN"
+                : m === "zoom-out" ? "ZOOM OUT"
+                : m === "spin"     ? "ROTATING"
+                :                    "";
+    if (label) {
+      ctx.font      = "bold 9px monospace";
+      ctx.fillStyle = m === "zoom-in"  ? "#66ffcc"
+                    : m === "zoom-out" ? "#ffaa44"
+                    :                    "#7fe8ff";
+      ctx.textAlign = "center";
+      ctx.fillText(label, width / 2, 14);
+    }
   }
 }
