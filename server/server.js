@@ -171,7 +171,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // API key check
+  // AQ. keys are OAuth2 access tokens — they can be used directly as the
+  // WebSocket access_token without minting an ephemeral token.
+  // AIza keys need to be exchanged for an ephemeral token first.
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     console.error('[SIGNAL] GEMINI_API_KEY is not set — create server/.env');
@@ -180,21 +182,34 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Mint token
-  try {
-    const data = await mintToken(apiKey);
-    const resp = JSON.stringify({ token: data.name, expireTime: data.expire_time });
+  if (apiKey.toLowerCase().startsWith('aq.')) {
+    // OAuth access token — use directly as WebSocket access_token
+    const resp = JSON.stringify({ token: apiKey });
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type':  'application/json',
       'Cache-Control': 'no-store',
     });
     res.end(resp);
-    console.log(`[SIGNAL] Token minted for ${clientIp}`);
+    console.log(`[SIGNAL] OAuth token passed through for ${clientIp}`);
+    return;
+  }
+
+  // AIza API key — mint a single-use ephemeral token
+  try {
+    const data = await mintToken(apiKey);
+    const resp = JSON.stringify({ token: data.name, expireTime: data.expireTime });
+    res.writeHead(200, {
+      ...corsHeaders,
+      'Content-Type':  'application/json',
+      'Cache-Control': 'no-store',
+    });
+    res.end(resp);
+    console.log(`[SIGNAL] Ephemeral token minted for ${clientIp}`);
   } catch (err) {
     console.error('[SIGNAL] Token mint failed:', err.message);
     res.writeHead(502, { ...corsHeaders, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Failed to mint session token' }));
+    res.end(JSON.stringify({ error: `Failed to mint session token: ${err.message}` }));
   }
 });
 
