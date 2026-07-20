@@ -180,7 +180,7 @@ function init() {
     if (micCapturing) return;
 
     // Initialise playback on the first user gesture (browser policy)
-    if (!playback._ready) {
+    if (!playback.isReady) {
       try { await playback.init(); }
       catch (err) { showError('AUDIO OUTPUT FAILED: ' + err.message); return; }
     }
@@ -252,7 +252,7 @@ function init() {
     if (!text) return;
 
     // Initialise playback on first user gesture
-    if (!playback._ready) {
+    if (!playback.isReady) {
       try { await playback.init(); }
       catch (err) { showError('AUDIO OUTPUT FAILED: ' + err.message); return; }
     }

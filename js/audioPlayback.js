@@ -27,6 +27,9 @@ export class AudioPlayback {
     this.onSpeakingChange = null; // (isSpeaking: boolean) => void
   }
 
+  /** True once init() has completed successfully. */
+  get isReady() { return this._ready; }
+
   /**
    * Create the AudioContext and load the worklet.
    * Must be called from a user-gesture handler (browser policy).

@@ -11,7 +11,7 @@
 // Model: models/gemini-2.5-flash-native-audio (stable as of July 2026).
 // Check https://ai.google.dev/api/live for updates when this becomes deprecated.
 //
-// response_modalities: ["AUDIO"] — voice-only output; typed text from the user
+// responseModalities: ["AUDIO"] — voice-only output; typed text from the user
 // is a second *input* path on the same session, not a separate TTS step.
 //
 // Voice: "Aoede" — clear, natural-sounding HD voice well-suited for a
@@ -28,18 +28,17 @@ const GEMINI_MODEL = 'models/gemini-2.5-flash-native-audio';
 const SIGNAL_VOICE = 'Aoede';
 
 // WebSocket endpoint using ephemeral token (v1alpha, constrained)
-const WS_ENDPOINT  =
+const WS_ENDPOINT =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage' +
   '.v1alpha.GenerativeService.BidiGenerateContentConstrained';
 
 // Audio-only session cap is 15 minutes. Warn at 14:30 and close cleanly.
-const SESSION_CAP_MS      = 15 * 60 * 1000;
-const SESSION_WARN_MS     = 14.5 * 60 * 1000;
+const SESSION_WARN_MS    = 14.5 * 60 * 1000;
 
-// Reconnect backoff config (exponential, seconds)
-const BACKOFF_BASE_MS     = 1000;
-const BACKOFF_MAX_MS      = 30_000;
-const BACKOFF_MULTIPLIER  = 2;
+// Reconnect backoff config (exponential)
+const BACKOFF_BASE_MS    = 1000;
+const BACKOFF_MAX_MS     = 30_000;
+const BACKOFF_MULTIPLIER = 2;
 
 // System instruction for SIGNAL's persona.
 // Keep concise and voice-appropriate: no markdown, no long lists.
@@ -79,14 +78,14 @@ function base64ToArrayBuffer(b64) {
 export class GeminiLiveClient {
   /**
    * @param {object} opts
-   * @param {string}   opts.tokenUrl        — Backend URL for GET /api/token
+   * @param {string}   opts.tokenUrl           — Backend URL for GET /api/token
    * @param {Function} [opts.onSessionOpen]     — () => void
    * @param {Function} [opts.onModelTurnStart]  — () => void  (barge-in trigger)
    * @param {Function} [opts.onAudioChunk]      — (ArrayBuffer) => void
    * @param {Function} [opts.onTurnComplete]    — () => void
    * @param {Function} [opts.onError]           — (Error) => void
-   * @param {Function} [opts.onSessionClose]    — ({ reason: string, willReconnect: bool }) => void
-   *   reason: 'clean' | 'session_cap' | 'error' | 'network'
+   * @param {Function} [opts.onSessionClose]    — ({ reason, willReconnect }) => void
+   *   reason: 'clean' | 'session_cap' | 'network'
    */
   constructor({
     tokenUrl,
@@ -105,21 +104,20 @@ export class GeminiLiveClient {
     this.onError          = onError;
     this.onSessionClose   = onSessionClose;
 
-    this._ws             = null;
+    this._ws               = null;
     this._intentionalClose = false;
-    this._connected      = false;
-    this._backoffMs      = BACKOFF_BASE_MS;
-    this._reconnectTimer = null;
-    this._sessionTimer   = null;
+    this._connected        = false;
+    this._backoffMs        = BACKOFF_BASE_MS;
+    this._reconnectTimer   = null;
     this._sessionWarnTimer = null;
-    this._inModelTurn    = false; // track whether we're mid-response
+    this._inModelTurn      = false;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────
 
   /**
    * Fetch an ephemeral token and open the Gemini Live WebSocket session.
-   * Safe to call multiple times — will no-op if already connected.
+   * Safe to call multiple times — no-ops if already connected.
    */
   async connect() {
     if (this._connected || this._ws) return;
@@ -132,6 +130,7 @@ export class GeminiLiveClient {
       return;
     }
 
+    this._intentionalClose = false;
     this._openWebSocket(token);
   }
 
@@ -142,11 +141,13 @@ export class GeminiLiveClient {
   sendAudioChunk(int16Buffer) {
     if (!this._connected) return;
     const b64 = arrayBufferToBase64(int16Buffer);
+    // NOTE: Gemini Live WebSocket protocol uses camelCase JSON field names
+    // (proto3 JSON encoding). snake_case will be silently ignored by the API.
     this._send({
-      realtime_input: {
-        media_chunks: [{
-          mime_type: 'audio/pcm;rate=16000',
-          data:       b64,
+      realtimeInput: {
+        mediaChunks: [{
+          mimeType: 'audio/pcm;rate=16000',
+          data:     b64,
         }],
       },
     });
@@ -154,18 +155,19 @@ export class GeminiLiveClient {
 
   /**
    * Send a typed message as a complete conversational turn.
-   * The session's response_modalities is AUDIO, so the reply is always spoken.
+   * responseModalities is AUDIO, so the reply is always spoken regardless
+   * of whether input came from voice or text.
    * @param {string} text
    */
   sendTextMessage(text) {
     if (!this._connected) return;
     this._send({
-      client_content: {
+      clientContent: {
         turns: [{
           role:  'user',
           parts: [{ text }],
         }],
-        turn_complete: true,
+        turnComplete: true,
       },
     });
   }
@@ -186,17 +188,17 @@ export class GeminiLiveClient {
   get isConnected() { return this._connected; }
 
   // ── Camera extension stub (future work) ─────────────────────────────────
-  // To add live video: capture video frames (e.g., from getUserMedia video
-  // track), encode as JPEG, base64-encode, and call this method.
+  // To add live video: capture frames from getUserMedia video track,
+  // encode as JPEG, base64-encode, and call this method.
   // The existing WebSocket session supports audio + video concurrently —
-  // no session refactoring is needed.
+  // no session refactoring needed.
   //
   // sendVideoChunk(base64Jpeg) {
   //   if (!this._connected) return;
   //   this._send({
-  //     realtime_input: {
-  //       media_chunks: [{
-  //         mime_type: 'image/jpeg',
+  //     realtimeInput: {
+  //       mediaChunks: [{
+  //         mimeType: 'image/jpeg',
   //         data: base64Jpeg,
   //       }],
   //     },
@@ -208,7 +210,8 @@ export class GeminiLiveClient {
   async _fetchToken() {
     const resp = await fetch(this._tokenUrl, { cache: 'no-store' });
     if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`);
+      const body = await resp.text().catch(() => '');
+      throw new Error(`HTTP ${resp.status}${body ? ': ' + body : ''}`);
     }
     const data = await resp.json();
     if (!data.token) throw new Error('No token in response');
@@ -220,28 +223,26 @@ export class GeminiLiveClient {
     this._ws  = new WebSocket(url);
 
     this._ws.onopen = () => {
-      // Send the setup handshake immediately on open
+      // Send the setup handshake immediately on open.
+      // ALL field names must be camelCase — the Gemini Live API uses proto3
+      // JSON encoding which maps proto field names to camelCase.
       this._send({
         setup: {
           model: GEMINI_MODEL,
-          generation_config: {
-            response_modalities:    ['AUDIO'],
-            // Enable output transcription so a captions layer can be added
-            // later without requiring a new session. Not displayed in UI now.
-            enable_affective_dialog: true,
+          generationConfig: {
+            responseModalities: ['AUDIO'],
           },
-          output_audio_transcription: {},
-          system_instruction: {
+          systemInstruction: {
             parts: [{ text: SYSTEM_INSTRUCTION }],
           },
-          speech_config: {
-            voice_config: {
-              prebuilt_voice_config: { voice_name: SIGNAL_VOICE },
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: SIGNAL_VOICE },
             },
           },
         },
       });
-      // onSessionOpen is fired after server sends setupComplete
+      // onSessionOpen fires after the server sends setupComplete
     };
 
     this._ws.onmessage = (evt) => {
@@ -250,7 +251,7 @@ export class GeminiLiveClient {
 
     this._ws.onerror = (evt) => {
       console.error('[GeminiLive] WebSocket error', evt);
-      this.onError(new Error('WebSocket error'));
+      this.onError(new Error('WebSocket connection error'));
     };
 
     this._ws.onclose = (evt) => {
@@ -263,7 +264,6 @@ export class GeminiLiveClient {
         return;
       }
 
-      // Unexpected close — attempt reconnect with backoff
       console.warn(`[GeminiLive] Closed unexpectedly (code ${evt.code}). Reconnecting in ${this._backoffMs}ms`);
       this.onSessionClose({ reason: 'network', willReconnect: true });
       this._scheduleReconnect();
@@ -273,44 +273,49 @@ export class GeminiLiveClient {
   _handleMessage(raw) {
     let msg;
     try {
-      msg = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(new TextDecoder().decode(raw));
+      msg = typeof raw === 'string'
+        ? JSON.parse(raw)
+        : JSON.parse(new TextDecoder().decode(raw));
     } catch (err) {
       console.warn('[GeminiLive] Could not parse message', err);
       return;
     }
 
+    // Log the raw message structure in dev so field names are visible
+    // console.debug('[GeminiLive] ←', JSON.stringify(msg).slice(0, 200));
+
     // ── Setup complete ──────────────────────────────────────────────────
-    if (msg.setup_complete !== undefined) {
+    // Server sends { setupComplete: {} } after accepting the setup message.
+    if (msg.setupComplete !== undefined) {
       this._connected  = true;
       this._backoffMs  = BACKOFF_BASE_MS; // reset backoff on successful connect
-      this._intentionalClose = false;
       this._startSessionTimers();
       this.onSessionOpen();
       return;
     }
 
-    // ── Server content (model response) ────────────────────────────────
-    if (msg.server_content) {
-      const sc = msg.server_content;
+    // ── Server content (model audio response) ──────────────────────────
+    if (msg.serverContent) {
+      const sc = msg.serverContent;
 
-      // Model turn start: fire barge-in event so old audio gets flushed
-      if (sc.model_turn && !this._inModelTurn) {
+      // Model turn start → fire barge-in so old audio gets flushed
+      if (sc.modelTurn && !this._inModelTurn) {
         this._inModelTurn = true;
         this.onModelTurnStart();
       }
 
-      // Audio chunks in the model turn
-      if (sc.model_turn?.parts) {
-        for (const part of sc.model_turn.parts) {
-          if (part.inline_data?.mime_type?.startsWith('audio/pcm')) {
-            const buffer = base64ToArrayBuffer(part.inline_data.data);
+      // Audio parts — each inlineData blob is a chunk of PCM audio
+      if (sc.modelTurn?.parts) {
+        for (const part of sc.modelTurn.parts) {
+          if (part.inlineData?.mimeType?.startsWith('audio/pcm')) {
+            const buffer = base64ToArrayBuffer(part.inlineData.data);
             this.onAudioChunk(buffer);
           }
         }
       }
 
       // Turn complete
-      if (sc.turn_complete) {
+      if (sc.turnComplete) {
         this._inModelTurn = false;
         this.onTurnComplete();
       }
@@ -318,7 +323,7 @@ export class GeminiLiveClient {
       return;
     }
 
-    // ── Tool / error frames ─────────────────────────────────────────────
+    // ── Error frames ────────────────────────────────────────────────────
     if (msg.error) {
       console.error('[GeminiLive] Server error:', msg.error);
       this.onError(new Error(msg.error.message || 'Unknown server error'));
@@ -327,12 +332,11 @@ export class GeminiLiveClient {
 
   _startSessionTimers() {
     this._clearTimers();
-
-    // Warn close to the 15-minute audio-only session cap
+    // Fire just before the 15-minute audio-only session cap
     this._sessionWarnTimer = setTimeout(() => {
-      console.warn('[GeminiLive] Approaching 15-minute session cap');
+      console.warn('[GeminiLive] Approaching 15-minute session cap — closing cleanly');
       this.onSessionClose({ reason: 'session_cap', willReconnect: false });
-      // Clean disconnect; the UI layer decides whether to auto-reconnect
+      this._intentionalClose = true; // prevent the onclose handler from reconnecting
       this.disconnect();
     }, SESSION_WARN_MS);
   }
@@ -340,17 +344,15 @@ export class GeminiLiveClient {
   _scheduleReconnect() {
     this._reconnectTimer = setTimeout(async () => {
       if (this._intentionalClose) return;
-      console.log(`[GeminiLive] Reconnecting…`);
+      console.log('[GeminiLive] Reconnecting…');
       this._backoffMs = Math.min(this._backoffMs * BACKOFF_MULTIPLIER, BACKOFF_MAX_MS);
       await this.connect();
     }, this._backoffMs);
   }
 
   _clearTimers() {
-    clearTimeout(this._sessionTimer);
     clearTimeout(this._sessionWarnTimer);
     clearTimeout(this._reconnectTimer);
-    this._sessionTimer     = null;
     this._sessionWarnTimer = null;
     this._reconnectTimer   = null;
   }
