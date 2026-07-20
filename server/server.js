@@ -77,24 +77,36 @@ function checkRate(ip) {
 }
 
 // ── Ephemeral token minting ───────────────────────────────────────────────
+// Key format detection:
+//   aq.*   → newer Google AI Studio format → Authorization: Bearer <key>
+//   AIza*  → classic API key format        → x-goog-api-key: <key>
+function buildAuthHeaders(apiKey) {
+  if (apiKey.startsWith('aq.')) {
+    return { 'Authorization': `Bearer ${apiKey}` };
+  }
+  return { 'x-goog-api-key': apiKey };
+}
+
 function mintToken(apiKey) {
   return new Promise((resolve, reject) => {
     const expireTime = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    // Body uses camelCase (proto3 JSON encoding) — snake_case is silently ignored
     const body = JSON.stringify({
-      expire_time: expireTime,
-      uses:        1,
-      live_connect_constraints: {
+      expireTime,
+      uses: 1,
+      liveConnectConstraints: {
         model:  GEMINI_MODEL,
-        config: { response_modalities: ['AUDIO'] },
+        config: { responseModalities: ['AUDIO'] },
       },
     });
 
+    const authHeaders = buildAuthHeaders(apiKey);
     const options = {
       hostname: 'generativelanguage.googleapis.com',
       path:     '/v1alpha/ephemeral-tokens',
       method:   'POST',
       headers:  {
-        'x-goog-api-key': apiKey,
+        ...authHeaders,
         'Content-Type':   'application/json',
         'Content-Length': Buffer.byteLength(body),
       },
@@ -193,14 +205,17 @@ server.listen(PORT, () => {
   console.log(`  ║   http://localhost:${PORT}/api/token    ║`);
   console.log('  ╚══════════════════════════════════════╝');
   console.log('');
-  if (!process.env.GEMINI_API_KEY) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
     console.error('  ⚠  GEMINI_API_KEY not set!');
-    console.error('     Create server/.env with:');
-    console.error('     GEMINI_API_KEY=AIza...');
+    console.error('     Open server/.env and paste your key:');
+    console.error('     GEMINI_API_KEY=aq.your_key_here');
     console.error('');
   } else {
-    console.log('  ✓  API key loaded');
+    const authMethod = key.startsWith('aq.') ? 'Bearer token (aq. format)' : 'x-goog-api-key (AIza format)';
+    console.log(`  ✓  API key loaded  [${authMethod}]`);
     console.log('  ✓  Ready to mint ephemeral tokens');
     console.log('');
   }
 });
+
