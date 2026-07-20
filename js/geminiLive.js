@@ -85,6 +85,7 @@ export class GeminiLiveClient {
    * @param {Function} [opts.onModelTurnStart]  — () => void  (barge-in trigger)
    * @param {Function} [opts.onAudioChunk]      — (ArrayBuffer) => void
    * @param {Function} [opts.onTurnComplete]    — () => void
+   * @param {Function} [opts.onTranscript]      — (text: string) => void  (AI subtitle)
    * @param {Function} [opts.onError]           — (Error) => void
    * @param {Function} [opts.onSessionClose]    — ({ reason, willReconnect }) => void
    *   reason: 'clean' | 'session_cap' | 'network'
@@ -95,6 +96,7 @@ export class GeminiLiveClient {
     onModelTurnStart = () => {},
     onAudioChunk     = () => {},
     onTurnComplete   = () => {},
+    onTranscript     = () => {},
     onError          = () => {},
     onSessionClose   = () => {},
   } = {}) {
@@ -103,6 +105,7 @@ export class GeminiLiveClient {
     this.onModelTurnStart = onModelTurnStart;
     this.onAudioChunk     = onAudioChunk;
     this.onTurnComplete   = onTurnComplete;
+    this.onTranscript     = onTranscript;
     this.onError          = onError;
     this.onSessionClose   = onSessionClose;
 
@@ -247,6 +250,9 @@ export class GeminiLiveClient {
               prebuiltVoiceConfig: { voiceName: SIGNAL_VOICE },
             },
           },
+          // Request text transcription of the model's spoken audio output
+          // so we can display subtitles without a separate TTS-to-text step
+          outputAudioTranscription: {},
         },
       });
       // onSessionOpen fires after the server sends setupComplete
@@ -318,7 +324,19 @@ export class GeminiLiveClient {
             const buffer = base64ToArrayBuffer(part.inlineData.data);
             this.onAudioChunk(buffer);
           }
+          // Inline text parts (some models return text + audio together)
+          if (part.text) {
+            this.onTranscript(part.text);
+          }
         }
+      }
+
+      // Output audio transcription — text version of what the model spoke
+      // Arrives as a separate serverContent message alongside audio chunks
+      if (sc.outputTranscription?.parts) {
+        const text = sc.outputTranscription.parts
+          .map(p => p.text || '').join('');
+        if (text) this.onTranscript(text);
       }
 
       // Turn complete

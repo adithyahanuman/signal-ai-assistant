@@ -51,6 +51,9 @@ function init() {
   const textInputRow   = document.getElementById('text-input-row');
   const textInput      = document.getElementById('text-input');
   const textSendBtn    = document.getElementById('text-send-btn');
+  const subtitleBar    = document.getElementById('subtitle-bar');
+  const subtitleText   = document.getElementById('subtitle-text');
+  const chatPanel      = document.getElementById('chat-panel');
 
   // ── Orb scene ─────────────────────────────────────────────────────────
   const scene = createOrbScene(container, { interactive: true });
@@ -61,8 +64,9 @@ function init() {
   let tracker         = null;
   let micCapturing    = false;    // true when AudioCapture is actively streaming
   let sessionReady    = false;    // true once Gemini WS setupComplete received
-  let textVisible     = false;    // text input row visibility
   let ampPollId       = null;     // setInterval id for amplitude polling
+  let subtitleTimer   = null;     // timeout to hide subtitle after turn ends
+  let currentAiMsg    = null;     // current AI chat bubble being built
 
   // ── Audio modules (created lazily on first user gesture) ─────────────
   const capture  = new AudioCapture({
@@ -92,6 +96,8 @@ function init() {
       // Barge-in: if old audio is still playing, cut it off immediately
       playback.flush();
       setConvState('speaking');
+      // Start a new AI chat bubble
+      currentAiMsg = null;
     },
 
     onAudioChunk: (buffer) => {
@@ -101,12 +107,33 @@ function init() {
       setConvState('speaking');
     },
 
+    onTranscript: (text) => {
+      // Show subtitle bar
+      if (subtitleText) subtitleText.textContent = text;
+      if (subtitleBar)  subtitleBar.classList.add('visible');
+      clearTimeout(subtitleTimer);
+
+      // Append to / create AI chat bubble
+      if (chatPanel) {
+        if (!currentAiMsg) {
+          currentAiMsg = document.createElement('div');
+          currentAiMsg.className = 'chat-msg ai';
+          chatPanel.appendChild(currentAiMsg);
+        }
+        currentAiMsg.textContent = (currentAiMsg.textContent || '') + text;
+        chatPanel.scrollTop = chatPanel.scrollHeight;
+      }
+    },
+
     onTurnComplete: () => {
       // Keep 'speaking' until the ring buffer drains (onSpeakingChange handles idle)
-      // If buffer is already empty (very short reply), go idle now
-      if (!playback.isSpeaking) {
-        setConvState('idle');
-      }
+      if (!playback.isSpeaking) setConvState('idle');
+      // Hide subtitle after a short delay so user can finish reading
+      clearTimeout(subtitleTimer);
+      subtitleTimer = setTimeout(() => {
+        if (subtitleBar) subtitleBar.classList.remove('visible');
+      }, 3500);
+      currentAiMsg = null;
     },
 
     onError: (err) => {
@@ -278,6 +305,15 @@ function init() {
     // Temporarily pause mic capture so audio and text don't collide on same turn
     const wasCapturing = micCapturing;
     if (wasCapturing) capture.mute();
+
+    // Add user message to chat panel
+    if (chatPanel) {
+      const bubble = document.createElement('div');
+      bubble.className = 'chat-msg user';
+      bubble.textContent = text;
+      chatPanel.appendChild(bubble);
+      chatPanel.scrollTop = chatPanel.scrollHeight;
+    }
 
     // Send the text turn
     gemini.sendTextMessage(text);

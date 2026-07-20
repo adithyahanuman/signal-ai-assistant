@@ -70,7 +70,7 @@ const rateMap = new Map();
 function checkRate(ip) {
   const now   = Date.now();
   const times = (rateMap.get(ip) || []).filter(t => now - t < 60_000);
-  if (times.length >= 10) return false;
+  if (times.length >= 60) return false; // 60 requests/min for local dev
   times.push(now);
   rateMap.set(ip, times);
   return true;

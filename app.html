@@ -203,6 +203,93 @@
     #conv-status.listening { color: #7fe8ff; }
     #conv-status.thinking  { color: rgba(183,240,255,0.7); }
     #conv-status.speaking  { color: #b8f0ff; }
+
+    /* ── Text input: always visible ── */
+    #text-input-row {
+      display: flex !important;   /* always shown */
+      flex-direction: row;
+      gap: 6px;
+      align-items: center;
+      width: 260px;
+    }
+
+    /* ── Subtitle bar ── */
+    #subtitle-bar {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: 680px;
+      width: 90%;
+      text-align: center;
+      pointer-events: none;
+      z-index: 50;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+    }
+    #subtitle-bar.visible { opacity: 1; }
+    #subtitle-text {
+      display: inline-block;
+      padding: 8px 22px;
+      background: rgba(0, 10, 20, 0.72);
+      border: 1px solid rgba(127,232,255,0.25);
+      border-radius: 6px;
+      backdrop-filter: blur(8px);
+      color: #c8f4ff;
+      font-family: 'Space Mono', 'Courier New', monospace;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      line-height: 1.5;
+      text-shadow: 0 0 12px rgba(127,232,255,0.5);
+    }
+
+    /* ── Chat history panel ── */
+    #chat-panel {
+      position: fixed;
+      bottom: 90px;
+      left: 18px;
+      width: 300px;
+      max-height: 260px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 40;
+      pointer-events: none;
+    }
+    #chat-panel::-webkit-scrollbar { width: 3px; }
+    #chat-panel::-webkit-scrollbar-thumb { background: rgba(127,232,255,0.3); border-radius: 2px; }
+
+    .chat-msg {
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-family: 'Space Mono', 'Courier New', monospace;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      line-height: 1.5;
+      max-width: 100%;
+      word-break: break-word;
+      animation: msgFadeIn 0.3s ease;
+    }
+    @keyframes msgFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .chat-msg.user {
+      background: rgba(0,40,60,0.6);
+      border: 1px solid rgba(127,232,255,0.3);
+      color: #7fe8ff;
+      align-self: flex-end;
+      text-align: right;
+    }
+    .chat-msg.user::before { content: 'YOU  '; color: rgba(127,232,255,0.45); font-size: 9px; }
+    .chat-msg.ai {
+      background: rgba(0,20,35,0.55);
+      border: 1px solid rgba(127,232,255,0.15);
+      color: rgba(200,244,255,0.85);
+      align-self: flex-start;
+    }
+    .chat-msg.ai::before { content: 'SIGNAL  '; color: rgba(127,232,255,0.45); font-size: 9px; }
   </style>
 
   <!-- Three.js + addons + MediaPipe import map -->
@@ -308,5 +395,16 @@
 </div>
 
 <script type="module" src="js/main-app.js"></script>
+
+<!-- ── Subtitle bar (shown while SIGNAL is speaking) ── -->
+<div id="subtitle-bar" role="status" aria-live="polite">
+  <div id="subtitle-text"></div>
+</div>
+
+<!-- ── Chat history panel (bottom-left) ── -->
+<div id="chat-panel" aria-label="Conversation history">
+  <!-- messages injected by JS -->
+</div>
+
 </body>
 </html>
