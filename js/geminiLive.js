@@ -24,13 +24,15 @@
 // No session refactoring is needed; just uncomment the stub below and
 // wire in a video capture source.
 
-const GEMINI_MODEL = 'models/gemini-2.5-flash-native-audio';
+const GEMINI_MODEL = 'models/gemini-2.0-flash-live-001'; // stable Live API model
 const SIGNAL_VOICE = 'Aoede';
 
-// WebSocket endpoint using ephemeral token (v1alpha, constrained)
-const WS_ENDPOINT =
-  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage' +
-  '.v1alpha.GenerativeService.BidiGenerateContentConstrained';
+// Two WebSocket endpoints:
+//  • BidiGenerateContent          — for OAuth tokens (AQ.) and regular API keys
+//  • BidiGenerateContentConstrained — for single-use ephemeral tokens only
+const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.';
+const WS_UNCONSTRAINED  = WS_BASE + 'BidiGenerateContent';
+const WS_CONSTRAINED    = WS_BASE + 'BidiGenerateContentConstrained';
 
 // Audio-only session cap is 15 minutes. Warn at 14:30 and close cleanly.
 const SESSION_WARN_MS    = 14.5 * 60 * 1000;
@@ -122,16 +124,16 @@ export class GeminiLiveClient {
   async connect() {
     if (this._connected || this._ws) return;
 
-    let token;
+    let tokenData;
     try {
-      token = await this._fetchToken();
+      tokenData = await this._fetchToken();
     } catch (err) {
       this.onError(new Error(`Token fetch failed: ${err.message}`));
       return;
     }
 
     this._intentionalClose = false;
-    this._openWebSocket(token);
+    this._openWebSocket(tokenData);
   }
 
   /**
@@ -215,11 +217,16 @@ export class GeminiLiveClient {
     }
     const data = await resp.json();
     if (!data.token) throw new Error('No token in response');
-    return data.token;
+    // Server sets type='oauth' for AQ. passthrough, 'ephemeral' for minted tokens
+    return { token: data.token, type: data.type || 'ephemeral' };
   }
 
-  _openWebSocket(token) {
-    const url = `${WS_ENDPOINT}?access_token=${encodeURIComponent(token)}`;
+  _openWebSocket({ token, type }) {
+    // OAuth tokens (AQ.) must use the unconstrained endpoint.
+    // Ephemeral tokens use the constrained endpoint.
+    const endpoint = (type === 'oauth') ? WS_UNCONSTRAINED : WS_CONSTRAINED;
+    const url = `${endpoint}?access_token=${encodeURIComponent(token)}`;
+    console.log(`[GeminiLive] Connecting (${type}) →`, endpoint);
     this._ws  = new WebSocket(url);
 
     this._ws.onopen = () => {

@@ -183,8 +183,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (apiKey.toLowerCase().startsWith('aq.')) {
-    // OAuth access token — use directly as WebSocket access_token
-    const resp = JSON.stringify({ token: apiKey });
+    // OAuth access token — pass through directly.
+    // Frontend will use BidiGenerateContent (unconstrained) endpoint.
+    const resp = JSON.stringify({ token: apiKey, type: 'oauth' });
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type':  'application/json',
