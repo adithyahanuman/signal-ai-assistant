@@ -135,6 +135,74 @@
     .app-mode-indicator span { color: #7fe8ff; }
 
     @media (max-width: 600px) { .hud-hint { display: none; } }
+
+    /* ── Voice / text input controls ── */
+    #voice-row { align-items: center; }
+
+    .hud-btn-icon {
+      min-width: 44px; width: 44px; height: 44px; padding: 0;
+      font-size: 18px; display: flex; align-items: center; justify-content: center;
+    }
+
+    /* Mic button active state — pulsing ring shows we're capturing */
+    #mic-btn[aria-pressed="true"] {
+      background: rgba(0,60,90,0.6);
+      border-color: #b8f0ff;
+      color: #b8f0ff;
+      box-shadow: 0 0 0 0 rgba(127,232,255,0.5);
+      animation: mic-pulse 1.4s ease-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%   { box-shadow: 0 0 0 0   rgba(127,232,255,0.55); }
+      70%  { box-shadow: 0 0 0 10px rgba(127,232,255,0);   }
+      100% { box-shadow: 0 0 0 0   rgba(127,232,255,0);    }
+    }
+
+    /* Text input row — hidden by default, revealed by toggle */
+    #text-input-row {
+      display: none;
+      flex-direction: row;
+      gap: 6px;
+      align-items: center;
+      width: 260px;
+    }
+    #text-input-row.visible { display: flex; }
+
+    .hud-text-input {
+      flex: 1;
+      height: 44px;
+      padding: 0 10px;
+      background: rgba(0,12,20,0.55);
+      border: 1px solid rgba(127,232,255,0.38);
+      border-radius: 4px;
+      color: #7fe8ff;
+      font-family: 'Space Mono', 'Courier New', monospace;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      backdrop-filter: blur(2px);
+      outline: none;
+      text-shadow: 0 0 6px rgba(127,232,255,0.4);
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .hud-text-input::placeholder { color: rgba(127,232,255,0.35); }
+    .hud-text-input:focus {
+      border-color: rgba(183,240,255,0.75);
+      box-shadow: 0 0 10px rgba(127,232,255,0.2);
+    }
+
+    /* Status strip above the controls showing current conversation mode */
+    #conv-status {
+      font-size: 10px;
+      letter-spacing: 0.2em;
+      color: rgba(127,232,255,0.55);
+      text-shadow: 0 0 8px rgba(127,232,255,0.4);
+      text-align: right;
+      min-height: 14px;
+      transition: color 0.3s;
+    }
+    #conv-status.listening { color: #7fe8ff; }
+    #conv-status.thinking  { color: rgba(183,240,255,0.7); }
+    #conv-status.speaking  { color: #b8f0ff; }
   </style>
 
   <!-- Three.js + addons + MediaPipe import map -->
@@ -175,9 +243,13 @@
       <span class="key">SCROLL</span> zoom
     </div>
     <div>
-      <span class="key">G</span> hand gestures&nbsp;&nbsp;
+      <span class="key">G</span> gestures&nbsp;&nbsp;
       <span class="key">R</span> reset&nbsp;&nbsp;
       <span class="key">+/−</span> zoom
+    </div>
+    <div>
+      <span class="key">M</span> mic&nbsp;&nbsp;
+      <span class="key">T</span> text input
     </div>
   </div>
 
@@ -190,8 +262,34 @@
       <div id="camera-status">SHOW HANDS</div>
     </div>
 
-    <!-- Error line -->
+    <!-- Error line — used for camera errors AND voice/session errors -->
     <div class="hud-error" id="hud-error"></div>
+
+    <!-- Conversation status strip -->
+    <div id="conv-status"></div>
+
+    <!-- Text input row (hidden by default; toggle with T key or ⌨ button) -->
+    <div id="text-input-row" role="search" aria-label="Type a message">
+      <input
+        id="text-input"
+        class="hud-text-input"
+        type="text"
+        placeholder="TYPE MESSAGE…"
+        autocomplete="off"
+        spellcheck="false"
+        maxlength="500"
+        aria-label="Message input"
+      />
+      <button type="button" class="hud-btn hud-btn-icon" id="text-send-btn" aria-label="Send message" title="Send (Enter)">▶</button>
+    </div>
+
+    <!-- Voice row: mic toggle + text input toggle -->
+    <div class="hud-row" id="voice-row">
+      <button type="button" class="hud-btn hud-btn-icon" id="mic-btn"
+              aria-pressed="false" aria-label="Toggle microphone" title="Toggle mic (M)">🎙</button>
+      <button type="button" class="hud-btn hud-btn-icon" id="text-toggle-btn"
+              aria-pressed="false" aria-label="Toggle text input" title="Toggle text input (T)">⌨</button>
+    </div>
 
     <!-- Gesture toggle -->
     <div class="hud-row">

@@ -19,6 +19,10 @@ dist-ssr
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
+server/.dev.vars
+# Never commit .env files with real values (use .env.example as template)
+.env
+server/.env
 
 # Editor directories and files
 .vscode/*

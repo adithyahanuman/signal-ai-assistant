@@ -556,6 +556,14 @@ export function createOrbScene(container, { interactive = true } = {}) {
   let   rafId         = 0;
   let   disposed      = false;
 
+  // ── Conversation state ──────────────────────────────────────────────────
+  // Set by setConversationState() — drives orb visual overlays.
+  // 'idle' | 'listening' | 'thinking' | 'speaking'
+  let _convState     = 'idle';
+  let _convAmplitude = 0; // 0..1, used in 'speaking' to pulse core with audio
+  // Smooth amplitude so the orb doesn't jitter on low-energy frames
+  let _ampSmooth     = 0;
+
   function animate() {
     if (disposed) return;
     rafId = requestAnimationFrame(animate);
@@ -657,7 +665,50 @@ export function createOrbScene(container, { interactive = true } = {}) {
       }
     }
 
-    bloom.strength = 0.6 + Math.sin(t * 0.8) * 0.1;
+    // ── Conversation state overlays ───────────────────────────────────────
+    // These modulate existing parameters rather than adding new geometry,
+    // so the visual language stays consistent with the base orb.
+    _ampSmooth = _ampSmooth * 0.8 + _convAmplitude * 0.2;
+
+    switch (_convState) {
+      case 'listening': {
+        // Equator brightens with a slow ripple; inner core spins slightly faster
+        bloom.strength = 0.85 + Math.sin(t * 2.5) * 0.12;
+        chromaticPass.uniforms.uIntensity.value = 0.004;
+        scanRing1.material.opacity = 0.4 + Math.sin(t * 3) * 0.15;
+        scanRing2.material.opacity = 0.3 + Math.sin(t * 4 + 1) * 0.1;
+        innerCore.rotation.y -= 0.002;
+        break;
+      }
+      case 'thinking': {
+        // Faster scan rings + higher chromatic aberration = processing feel
+        bloom.strength = 0.7 + Math.sin(t * 1.8) * 0.15;
+        chromaticPass.uniforms.uIntensity.value = 0.007 + Math.sin(t * 6) * 0.003;
+        if (Math.random() > 0.7) {
+          for (const p of panelGroup.children) {
+            if (Math.random() > 0.85) p.visible = !p.visible;
+          }
+        }
+        scanRing1.material.opacity = 0.45 + Math.sin(t * 5) * 0.2;
+        scanRing2.material.opacity = 0.35 + Math.sin(t * 7 + 2) * 0.15;
+        break;
+      }
+      case 'speaking': {
+        // Core pulse amplitude tracks real audio energy from AudioPlayback
+        const speakBoost = _ampSmooth * 1.8;
+        bloom.strength   = 0.75 + speakBoost * 0.6 + Math.sin(t * 3) * 0.08;
+        chromaticPass.uniforms.uIntensity.value = 0.003 + speakBoost * 0.006;
+        coreSphere.scale.multiplyScalar(1 + speakBoost * 0.5);
+        glowSphere.scale.multiplyScalar(1 + speakBoost * 0.3);
+        icoWireMat.opacity = Math.min(1, icoWireMat.opacity + speakBoost * 0.3);
+        break;
+      }
+      default: // 'idle'
+        bloom.strength = 0.6 + Math.sin(t * 0.8) * 0.1;
+        chromaticPass.uniforms.uIntensity.value = 0.003;
+        break;
+    }
+
     chromaticPass.uniforms.uTime.value = t;
 
     if (controls) controls.update();
@@ -697,5 +748,15 @@ export function createOrbScene(container, { interactive = true } = {}) {
     renderer.domElement.remove();
   }
 
-  return { rotateBy, zoomBy, zoomIn: () => zoomBy(0.65), zoomOut: () => zoomBy(1.55), resetView, dispose };
+  /**
+   * Drive the orb's visual state from the conversation lifecycle.
+   * @param {'idle'|'listening'|'thinking'|'speaking'} state
+   * @param {number} [amplitude=0] — 0..1 audio amplitude (only meaningful in 'speaking')
+   */
+  function setConversationState(state, amplitude = 0) {
+    _convState     = state;
+    _convAmplitude = amplitude;
+  }
+
+  return { rotateBy, zoomBy, zoomIn: () => zoomBy(0.65), zoomOut: () => zoomBy(1.55), resetView, dispose, setConversationState };
 }
