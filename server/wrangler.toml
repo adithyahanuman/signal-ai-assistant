@@ -1,0 +1,10 @@
+name            = "signal-token-service"
+main            = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# The GEMINI_API_KEY is stored as a Worker secret — NOT here.
+# Set it with: npx wrangler secret put GEMINI_API_KEY
+# Never put real keys in this file.
+
+[observability]
+enabled = true
