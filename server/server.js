@@ -81,7 +81,7 @@ function checkRate(ip) {
 //   aq.*   → newer Google AI Studio format → Authorization: Bearer <key>
 //   AIza*  → classic API key format        → x-goog-api-key: <key>
 function buildAuthHeaders(apiKey) {
-  if (apiKey.startsWith('aq.')) {
+  if (apiKey.toLowerCase().startsWith('aq.')) {
     return { 'Authorization': `Bearer ${apiKey}` };
   }
   return { 'x-goog-api-key': apiKey };
@@ -212,7 +212,7 @@ server.listen(PORT, () => {
     console.error('     GEMINI_API_KEY=aq.your_key_here');
     console.error('');
   } else {
-    const authMethod = key.startsWith('aq.') ? 'Bearer token (aq. format)' : 'x-goog-api-key (AIza format)';
+    const authMethod = key.toLowerCase().startsWith('aq.') ? 'Bearer token (aq. format)' : 'x-goog-api-key (AIza format)';
     console.log(`  ✓  API key loaded  [${authMethod}]`);
     console.log('  ✓  Ready to mint ephemeral tokens');
     console.log('');
