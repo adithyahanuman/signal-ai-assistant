@@ -44,7 +44,7 @@ if (fs.existsSync(envPath)) {
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT         = process.env.PORT || 3001;
-const GEMINI_MODEL = 'models/gemini-2.5-flash-native-audio';
+const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview'; // Gemini 3 Flash Live — must match geminiLive.js
 
 // TODO: gate this behind real auth before production traffic.
 // An open token-minting endpoint is a quota-abuse risk.
@@ -86,6 +86,7 @@ function buildAuthHeaders(apiKey) {
   }
   return { 'x-goog-api-key': apiKey };
 }
+
 
 function mintToken(apiKey) {
   return new Promise((resolve, reject) => {
@@ -171,9 +172,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // AQ. keys are OAuth2 access tokens — they can be used directly as the
-  // WebSocket access_token without minting an ephemeral token.
-  // AIza keys need to be exchanged for an ephemeral token first.
+  // AQ. keys are the new permanent Google AI Studio format.
+  // They are passed directly to the frontend as Bearer tokens.
+  // AIza keys need to be exchanged for a short-lived ephemeral token first.
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     console.error('[SIGNAL] GEMINI_API_KEY is not set — create server/.env');
@@ -183,16 +184,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (apiKey.toLowerCase().startsWith('aq.')) {
-    // OAuth access token — pass through directly.
-    // Frontend will use BidiGenerateContent (unconstrained) endpoint.
-    const resp = JSON.stringify({ token: apiKey, type: 'oauth' });
+    // AQ. keys are permanent API keys (not OAuth tokens).
+    // They use ?key= on the WebSocket URL, same as the old AIza format.
+    const resp = JSON.stringify({ token: apiKey, type: 'apikey' });
     res.writeHead(200, {
       ...corsHeaders,
       'Content-Type':  'application/json',
       'Cache-Control': 'no-store',
     });
     res.end(resp);
-    console.log(`[SIGNAL] OAuth token passed through for ${clientIp}`);
+    console.log(`[SIGNAL] AQ. key passed through for ${clientIp}`);
     return;
   }
 

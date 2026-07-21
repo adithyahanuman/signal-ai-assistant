@@ -24,7 +24,7 @@
 // No session refactoring is needed; just uncomment the stub below and
 // wire in a video capture source.
 
-const GEMINI_MODEL = 'models/gemini-2.0-flash-live-001'; // stable Live API model
+const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview'; // Gemini 3 Flash Live — must match server.js
 const SIGNAL_VOICE = 'Aoede';
 
 // Two WebSocket endpoints:
@@ -159,20 +159,16 @@ export class GeminiLiveClient {
   }
 
   /**
-   * Send a typed message as a complete conversational turn.
-   * responseModalities is AUDIO, so the reply is always spoken regardless
-   * of whether input came from voice or text.
+   * Send a typed text message during an active conversation.
+   * Gemini 3.1+ requires realtimeInput.text — clientContent is only for
+   * seeding initial history context, NOT for live conversation turns.
    * @param {string} text
    */
   sendTextMessage(text) {
     if (!this._connected) return;
     this._send({
-      clientContent: {
-        turns: [{
-          role:  'user',
-          parts: [{ text }],
-        }],
-        turnComplete: true,
+      realtimeInput: {
+        text,
       },
     });
   }
@@ -215,8 +211,20 @@ export class GeminiLiveClient {
   async _fetchToken() {
     const resp = await fetch(this._tokenUrl, { cache: 'no-store' });
     if (!resp.ok) {
-      const body = await resp.text().catch(() => '');
-      throw new Error(`HTTP ${resp.status}${body ? ': ' + body : ''}`);
+      // Try to parse a structured error from the server
+      let errMsg = `HTTP ${resp.status}`;
+      try {
+        const errData = await resp.json();
+        if (errData.expired) {
+          errMsg = 'TOKEN EXPIRED — paste a fresh AQ. key from aistudio.google.com into server/.env and restart the server';
+        } else if (errData.error) {
+          errMsg = errData.error;
+        }
+      } catch (_) {
+        const body = await resp.text().catch(() => '');
+        if (body) errMsg += ': ' + body;
+      }
+      throw new Error(errMsg);
     }
     const data = await resp.json();
     if (!data.token) throw new Error('No token in response');
@@ -225,11 +233,18 @@ export class GeminiLiveClient {
   }
 
   _openWebSocket({ token, type }) {
-    // OAuth tokens (AQ.) must use the unconstrained endpoint.
-    // Ephemeral tokens use the constrained endpoint.
-    const endpoint = (type === 'oauth') ? WS_UNCONSTRAINED : WS_CONSTRAINED;
-    const url = `${endpoint}?access_token=${encodeURIComponent(token)}`;
-    console.log(`[GeminiLive] Connecting (${type}) →`, endpoint);
+    // AQ. permanent API keys  → ?key=   on BidiGenerateContent (unconstrained)
+    // OAuth access tokens     → ?access_token= on BidiGenerateContent
+    // Ephemeral tokens        → ?access_token= on BidiGenerateContentConstrained
+    let url;
+    if (type === 'apikey') {
+      url = `${WS_UNCONSTRAINED}?key=${encodeURIComponent(token)}`;
+    } else if (type === 'oauth') {
+      url = `${WS_UNCONSTRAINED}?access_token=${encodeURIComponent(token)}`;
+    } else {
+      url = `${WS_CONSTRAINED}?access_token=${encodeURIComponent(token)}`;
+    }
+    console.log(`[GeminiLive] Connecting (${type}) →`, url.split('?')[0]);
     this._ws  = new WebSocket(url);
 
     this._ws.onopen = () => {
@@ -250,9 +265,8 @@ export class GeminiLiveClient {
               prebuiltVoiceConfig: { voiceName: SIGNAL_VOICE },
             },
           },
-          // Request text transcription of the model's spoken audio output
-          // so we can display subtitles without a separate TTS-to-text step
-          outputAudioTranscription: {},
+          // Note: outputAudioTranscription is not supported by gemini-3.1-flash-live-preview
+          // Transcript text arrives via inline text parts in modelTurn.parts instead
         },
       });
       // onSessionOpen fires after the server sends setupComplete
@@ -294,8 +308,8 @@ export class GeminiLiveClient {
       return;
     }
 
-    // Log the raw message structure in dev so field names are visible
-    // console.debug('[GeminiLive] ←', JSON.stringify(msg).slice(0, 200));
+    // Log every raw server message — shows field names and structure in DevTools Console
+    console.debug('[GeminiLive] ←', JSON.stringify(msg).slice(0, 300));
 
     // ── Setup complete ──────────────────────────────────────────────────
     // Server sends { setupComplete: {} } after accepting the setup message.

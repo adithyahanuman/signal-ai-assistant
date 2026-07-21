@@ -67,6 +67,7 @@ function init() {
   let ampPollId       = null;     // setInterval id for amplitude polling
   let subtitleTimer   = null;     // timeout to hide subtitle after turn ends
   let currentAiMsg    = null;     // current AI chat bubble being built
+  let textVisible     = false;    // true when text input row is shown
 
   // ── Audio modules (created lazily on first user gesture) ─────────────
   const capture  = new AudioCapture({
