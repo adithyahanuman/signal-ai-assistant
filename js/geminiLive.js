@@ -27,12 +27,11 @@
 const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview'; // Gemini 3 Flash Live — must match server.js
 const SIGNAL_VOICE = 'Aoede';
 
-// Two WebSocket endpoints:
-//  • BidiGenerateContent          — for OAuth tokens (AQ.) and regular API keys
-//  • BidiGenerateContentConstrained — for single-use ephemeral tokens only
-const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.';
-const WS_UNCONSTRAINED  = WS_BASE + 'BidiGenerateContent';
-const WS_CONSTRAINED    = WS_BASE + 'BidiGenerateContentConstrained';
+// WebSocket endpoint for ephemeral tokens (constrained, single-use)
+// v1beta is required for Gemini 3.x models
+const WS_BASE        = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.';
+const WS_CONSTRAINED = WS_BASE + 'BidiGenerateContentConstrained';
+const WS_UNCONSTRAINED = WS_BASE + 'BidiGenerateContent'; // kept for reference
 
 // Audio-only session cap is 15 minutes. Warn at 14:30 and close cleanly.
 const SESSION_WARN_MS    = 14.5 * 60 * 1000;
@@ -233,19 +232,13 @@ export class GeminiLiveClient {
   }
 
   _openWebSocket({ token, type }) {
-    // AQ. permanent API keys  → ?key=   on BidiGenerateContent (unconstrained)
-    // OAuth access tokens     → ?access_token= on BidiGenerateContent
-    // Ephemeral tokens        → ?access_token= on BidiGenerateContentConstrained
-    let url;
-    if (type === 'apikey') {
-      url = `${WS_UNCONSTRAINED}?key=${encodeURIComponent(token)}`;
-    } else if (type === 'oauth') {
-      url = `${WS_UNCONSTRAINED}?access_token=${encodeURIComponent(token)}`;
-    } else {
-      url = `${WS_CONSTRAINED}?access_token=${encodeURIComponent(token)}`;
-    }
+    // AQ. API keys  → ?key= on BidiGenerateContent (v1beta, unconstrained)
+    // Ephemeral     → ?access_token= on BidiGenerateContentConstrained (v1beta)
+    const url = (type === 'apikey')
+      ? `${WS_UNCONSTRAINED}?key=${encodeURIComponent(token)}`
+      : `${WS_CONSTRAINED}?access_token=${encodeURIComponent(token)}`;
     console.log(`[GeminiLive] Connecting (${type}) →`, url.split('?')[0]);
-    this._ws  = new WebSocket(url);
+    this._ws = new WebSocket(url);
 
     this._ws.onopen = () => {
       // Send the setup handshake immediately on open.

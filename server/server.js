@@ -76,14 +76,9 @@ function checkRate(ip) {
   return true;
 }
 
-// ── Ephemeral token minting ───────────────────────────────────────────────
-// Key format detection:
-//   aq.*   → newer Google AI Studio format → Authorization: Bearer <key>
-//   AIza*  → classic API key format        → x-goog-api-key: <key>
+// ── Auth headers ─────────────────────────────────────────────────────────
+// Both AQ. and AIza keys are API keys — use x-goog-api-key for all.
 function buildAuthHeaders(apiKey) {
-  if (apiKey.toLowerCase().startsWith('aq.')) {
-    return { 'Authorization': `Bearer ${apiKey}` };
-  }
   return { 'x-goog-api-key': apiKey };
 }
 
@@ -183,35 +178,28 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // AQ. and AIza keys are both permanent API keys.
+  // Pass AQ. directly as type:apikey — frontend uses ?key= on the WS URL.
+  // AIza keys go through ephemeral token minting for the constrained endpoint.
   if (apiKey.toLowerCase().startsWith('aq.')) {
-    // AQ. keys are permanent API keys (not OAuth tokens).
-    // They use ?key= on the WebSocket URL, same as the old AIza format.
     const resp = JSON.stringify({ token: apiKey, type: 'apikey' });
-    res.writeHead(200, {
-      ...corsHeaders,
-      'Content-Type':  'application/json',
-      'Cache-Control': 'no-store',
-    });
+    res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(resp);
-    console.log(`[SIGNAL] AQ. key passed through for ${clientIp}`);
+    console.log(`[SIGNAL] AQ. key sent to client for ${clientIp}`);
     return;
   }
 
-  // AIza API key — mint a single-use ephemeral token
+  // AIza key — mint a single-use ephemeral token
   try {
     const data = await mintToken(apiKey);
     const resp = JSON.stringify({ token: data.name, expireTime: data.expireTime });
-    res.writeHead(200, {
-      ...corsHeaders,
-      'Content-Type':  'application/json',
-      'Cache-Control': 'no-store',
-    });
+    res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(resp);
     console.log(`[SIGNAL] Ephemeral token minted for ${clientIp}`);
   } catch (err) {
     console.error('[SIGNAL] Token mint failed:', err.message);
     res.writeHead(502, { ...corsHeaders, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: `Failed to mint session token: ${err.message}` }));
+    res.end(JSON.stringify({ error: `Token mint failed: ${err.message}` }));
   }
 });
 
