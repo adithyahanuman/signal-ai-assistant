@@ -213,10 +213,11 @@
       width: 260px;
     }
 
-    /* ── Subtitle bar ── */
+
+    /* ── Subtitle bar (real-time caption while AI is speaking) ── */
     #subtitle-bar {
       position: fixed;
-      bottom: 28px;
+      bottom: 130px;
       left: 50%;
       transform: translateX(-50%);
       max-width: 680px;
@@ -243,53 +244,67 @@
       text-shadow: 0 0 12px rgba(127,232,255,0.5);
     }
 
-    /* ── Chat history panel ── */
+    /* ── Chat / response panel — centered in empty space below orb ── */
     #chat-panel {
       position: fixed;
       bottom: 90px;
-      left: 18px;
-      width: 300px;
-      max-height: 260px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(660px, 90vw);
+      max-height: 36vh;
       overflow-y: auto;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 8px;
       z-index: 40;
       pointer-events: none;
+      padding: 0 4px;
     }
     #chat-panel::-webkit-scrollbar { width: 3px; }
     #chat-panel::-webkit-scrollbar-thumb { background: rgba(127,232,255,0.3); border-radius: 2px; }
 
     .chat-msg {
-      padding: 6px 12px;
-      border-radius: 4px;
+      padding: 10px 16px;
+      border-radius: 6px;
       font-family: 'Space Mono', 'Courier New', monospace;
-      font-size: 11px;
-      letter-spacing: 0.05em;
-      line-height: 1.5;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      line-height: 1.6;
       max-width: 100%;
       word-break: break-word;
-      animation: msgFadeIn 0.3s ease;
+      animation: msgFadeIn 0.35s ease;
+      backdrop-filter: blur(10px);
     }
     @keyframes msgFadeIn {
-      from { opacity: 0; transform: translateY(6px); }
+      from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
     .chat-msg.user {
-      background: rgba(0,40,60,0.6);
+      background: rgba(0,40,70,0.65);
       border: 1px solid rgba(127,232,255,0.3);
       color: #7fe8ff;
       align-self: flex-end;
       text-align: right;
     }
-    .chat-msg.user::before { content: 'YOU  '; color: rgba(127,232,255,0.45); font-size: 9px; }
-    .chat-msg.ai {
-      background: rgba(0,20,35,0.55);
-      border: 1px solid rgba(127,232,255,0.15);
-      color: rgba(200,244,255,0.85);
-      align-self: flex-start;
+    .chat-msg.user::before {
+      content: 'YOU'; display: block;
+      color: rgba(127,232,255,0.45); font-size: 9px;
+      letter-spacing: 0.3em; margin-bottom: 4px;
     }
-    .chat-msg.ai::before { content: 'SIGNAL  '; color: rgba(127,232,255,0.45); font-size: 9px; }
+    .chat-msg.ai {
+      background: rgba(0,15,30,0.72);
+      border: 1px solid rgba(127,232,255,0.18);
+      color: rgba(200,244,255,0.9);
+      align-self: center;
+      text-align: center;
+      width: 100%;
+      box-shadow: 0 0 20px rgba(77,184,255,0.06);
+    }
+    .chat-msg.ai::before {
+      content: 'SIGNAL'; display: block;
+      color: rgba(127,232,255,0.45); font-size: 9px;
+      letter-spacing: 0.3em; margin-bottom: 4px;
+    }
   </style>
 
   <!-- Three.js + addons + MediaPipe import map -->

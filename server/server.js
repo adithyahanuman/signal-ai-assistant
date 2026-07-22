@@ -44,7 +44,7 @@ if (fs.existsSync(envPath)) {
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT         = process.env.PORT || 3001;
-const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview'; // Gemini 3 Flash Live — must match geminiLive.js
+const GEMINI_MODEL = 'models/gemini-2.0-flash-live-001'; // stable Live API model — must match geminiLive.js
 
 // TODO: gate this behind real auth before production traffic.
 // An open token-minting endpoint is a quota-abuse risk.

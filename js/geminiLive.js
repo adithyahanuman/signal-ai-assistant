@@ -24,7 +24,7 @@
 // No session refactoring is needed; just uncomment the stub below and
 // wire in a video capture source.
 
-const GEMINI_MODEL = 'models/gemini-3.1-flash-live-preview'; // Gemini 3 Flash Live — must match server.js
+const GEMINI_MODEL = 'models/gemini-2.0-flash-live-001'; // stable Live API model
 const SIGNAL_VOICE = 'Aoede';
 
 // WebSocket endpoint for ephemeral tokens (constrained, single-use)
