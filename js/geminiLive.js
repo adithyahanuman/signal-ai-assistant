@@ -27,11 +27,10 @@
 const GEMINI_MODEL = 'models/gemini-2.0-flash-live-001'; // stable Live API model
 const SIGNAL_VOICE = 'Aoede';
 
-// WebSocket endpoint for ephemeral tokens (constrained, single-use)
-// v1beta is required for Gemini 3.x models
-const WS_BASE        = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.';
-const WS_CONSTRAINED = WS_BASE + 'BidiGenerateContentConstrained';
-const WS_UNCONSTRAINED = WS_BASE + 'BidiGenerateContent'; // kept for reference
+// WebSocket endpoints — v1alpha is required for gemini-2.0-flash-live-001
+const WS_BASE        = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.';
+const WS_UNCONSTRAINED = WS_BASE + 'BidiGenerateContent';          // API key auth (?key=)
+const WS_CONSTRAINED   = WS_BASE + 'BidiGenerateContentConstrained'; // ephemeral token auth
 
 // Audio-only session cap is 15 minutes. Warn at 14:30 and close cleanly.
 const SESSION_WARN_MS    = 14.5 * 60 * 1000;
@@ -232,12 +231,9 @@ export class GeminiLiveClient {
   }
 
   _openWebSocket({ token, type }) {
-    // AQ. API keys  → ?key= on BidiGenerateContent (v1beta, unconstrained)
-    // Ephemeral     → ?access_token= on BidiGenerateContentConstrained (v1beta)
-    const url = (type === 'apikey')
-      ? `${WS_UNCONSTRAINED}?key=${encodeURIComponent(token)}`
-      : `${WS_CONSTRAINED}?access_token=${encodeURIComponent(token)}`;
-    console.log(`[GeminiLive] Connecting (${type}) →`, url.split('?')[0]);
+    // Always use constrained endpoint with ephemeral token (access_token param)
+    const url = `${WS_CONSTRAINED}?access_token=${encodeURIComponent(token)}`;
+    console.log('[GeminiLive] Connecting → BidiGenerateContentConstrained (v1alpha)');
     this._ws = new WebSocket(url);
 
     this._ws.onopen = () => {

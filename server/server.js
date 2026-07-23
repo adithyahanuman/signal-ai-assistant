@@ -77,7 +77,8 @@ function checkRate(ip) {
 }
 
 // ── Auth headers ─────────────────────────────────────────────────────────
-// Both AQ. and AIza keys are API keys — use x-goog-api-key for all.
+// Both AQ. and AIza keys are API keys — use x-goog-api-key header for all REST calls.
+// For WebSocket: always mint ephemeral tokens — most reliable auth path.
 function buildAuthHeaders(apiKey) {
   return { 'x-goog-api-key': apiKey };
 }
@@ -178,18 +179,9 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // AQ. and AIza keys are both permanent API keys.
-  // Pass AQ. directly as type:apikey — frontend uses ?key= on the WS URL.
-  // AIza keys go through ephemeral token minting for the constrained endpoint.
-  if (apiKey.toLowerCase().startsWith('aq.')) {
-    const resp = JSON.stringify({ token: apiKey, type: 'apikey' });
-    res.writeHead(200, { ...corsHeaders, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(resp);
-    console.log(`[SIGNAL] AQ. key sent to client for ${clientIp}`);
-    return;
-  }
-
-  // AIza key — mint a single-use ephemeral token
+  // Mint a single-use ephemeral token for any key type (AQ. or AIza).
+  // buildAuthHeaders uses x-goog-api-key which works for both formats.
+  // The minted token is used with BidiGenerateContentConstrained in the browser.
   try {
     const data = await mintToken(apiKey);
     const resp = JSON.stringify({ token: data.name, expireTime: data.expireTime });
@@ -197,7 +189,8 @@ const server = http.createServer(async (req, res) => {
     res.end(resp);
     console.log(`[SIGNAL] Ephemeral token minted for ${clientIp}`);
   } catch (err) {
-    console.error('[SIGNAL] Token mint failed:', err.message);
+    // Log the FULL Google API response so we can diagnose the exact error
+    console.error('[SIGNAL] Token mint FAILED:', err.message);
     res.writeHead(502, { ...corsHeaders, 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: `Token mint failed: ${err.message}` }));
   }
