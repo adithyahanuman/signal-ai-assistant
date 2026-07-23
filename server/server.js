@@ -100,7 +100,7 @@ function mintToken(apiKey) {
     const authHeaders = buildAuthHeaders(apiKey);
     const options = {
       hostname: 'generativelanguage.googleapis.com',
-      path:     '/v1alpha/ephemeral-tokens',
+      path:     '/v1beta/ephemeral-tokens',
       method:   'POST',
       headers:  {
         ...authHeaders,
